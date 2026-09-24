@@ -136,6 +136,30 @@ public class StorageTests : IDisposable
     }
 
     [Fact]
+    public void UpdateChecker_ListsReleasesOldestFirst()
+    {
+        UpdateChecker.ListedStable(Registration("0.2.0", "0.1.0", "0.3.0-rc", "0.1.1!", "0.10.0"))
+            .Select(v => v.ToString(3)).ShouldBe(["0.1.0", "0.2.0", "0.10.0"]);
+    }
+
+    [Fact]
+    public void Rollback_StepsBackThroughUpdates_NotRollbacks()
+    {
+        static UpdateHistory.Entry E(string from, string to, bool rollback = false) => new(DateTime.UtcNow, from, to, rollback);
+        var history = new[]
+        {
+            E("0.1.0", "0.1.2"),        // skipped 0.1.1
+            E("0.1.2", "0.3.0"),
+            E("0.3.0", "0.1.2", true),  // rolled back
+        };
+
+        UpdateHistory.PredecessorOf(history, new Version(0, 3, 0)).ShouldBe(new Version(0, 1, 2));
+        // After the rollback, the next one continues backwards instead of undoing it.
+        UpdateHistory.PredecessorOf(history, new Version(0, 1, 2)).ShouldBe(new Version(0, 1, 0));
+        UpdateHistory.PredecessorOf(history, new Version(0, 1, 0)).ShouldBeNull();
+    }
+
+    [Fact]
     public async Task UpdateChecker_SameVersion_IsNotAnUpdate()
     {
         var current = UpdateChecker.Current.ToString(3);

@@ -65,6 +65,7 @@ Messages you post reach every subscribed agent. Posting doesn't subscribe you, s
 | `parley install` | Hub service + register with Claude Code / Codex |
 | `parley status` | Hub state, sessions (● connected), topics, available updates |
 | `parley update` | Install the newest release and restart the hub (`--check` to only look) |
+| `parley update --rollback` | Go back to the version that ran before the last update (`--to <version>` for any release) |
 | `parley uninstall` | Remove the service and registrations. Your conversations are kept. |
 | `parley serve` | Run the hub in the foreground (debugging) |
 | `parley mcp` | The stdio MCP server that AI clients launch (you never run this yourself) |
@@ -78,6 +79,8 @@ parley update
 ```
 
 It stops the hub (saving its state), installs the new version, and starts the hub again, which takes a few seconds. Open AI sessions keep working through it: their Parley server reconnects to the new hub on its own and switches to the new version when the session restarts. Updates are still never applied unattended, so a release can't change things under you mid-task.
+
+If a release misbehaves, `parley update --rollback` reinstalls the version you had before (it remembers skipped versions in `update-history.jsonl`), and `parley update --to 0.1.2` installs any listed release.
 
 ## How it works
 
@@ -100,6 +103,7 @@ Everything lives in `%APPDATA%\Parley` on Windows and `~/.config/Parley` elsewhe
 | `messages.jsonl` | One message per line, flushed to disk before the send returns. Compacted as retention drops old messages. |
 | `state.json` | Topics, subscriptions and read positions. |
 | `hub.log` | Log of the background hub. |
+| `update.log`, `update-history.jsonl` | What `parley update` did, and which versions it went from and to (for `--rollback`). |
 
 Retention: 1,000 messages per topic and 10,000 in total. Topics with no activity for 7 days are dropped when the hub starts. On first start, conversations from TerminalHost's former built-in collab server are imported.
 

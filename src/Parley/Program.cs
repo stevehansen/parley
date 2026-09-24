@@ -12,6 +12,8 @@ const string usage = """
       parley uninstall            Remove the service and those registrations (keeps your conversations)
       parley status               Show the hub, connected sessions and topics
       parley update [--check]     Install the newest release (or just check for one)
+      parley update --rollback    Go back to the version that ran before
+      parley update --to <ver>    Install a specific release
       parley mcp                  MCP server over stdio — what an AI client launches; starts a hub if none runs
       parley serve [--background] Run the hub yourself (HTTP on 127.0.0.1:PARLEY_PORT, default 19480)
       parley --version
@@ -39,7 +41,7 @@ switch (args.FirstOrDefault())
         return await Commands.StatusAsync();
 
     case "update":
-        return await UpdateCommand.RunAsync(checkOnly: args.Contains("--check"));
+        return await UpdateCommand.RunAsync(args[1..]);
 
     case "mcp":
         return await McpShim.RunStdioAsync(cts.Token);

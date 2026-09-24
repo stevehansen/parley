@@ -21,7 +21,7 @@ public sealed class UpdateChecker(Func<CancellationToken, Task<string?>>? fetchI
     public static Version Current { get; } = Normalize(typeof(UpdateChecker).Assembly.GetName().Version);
 
     // Assembly versions carry a fourth part; NuGet's don't, and 0.1.0.0 > 0.1.0 to System.Version.
-    private static Version Normalize(Version? v) => v == null ? new Version(0, 0, 0) : new Version(v.Major, v.Minor, Math.Max(v.Build, 0));
+    internal static Version Normalize(Version? v) => v == null ? new Version(0, 0, 0) : new Version(v.Major, v.Minor, Math.Max(v.Build, 0));
 
     /// <summary>Newest stable version seen on NuGet, or null before the first successful check.</summary>
     public Version? Latest { get; private set; }
@@ -38,6 +38,16 @@ public sealed class UpdateChecker(Func<CancellationToken, Task<string?>>? fetchI
         return Latest;
     }
 
+    /// <summary>Every listed stable release, oldest first; null when NuGet can't say.</summary>
+    public async Task<List<Version>?> ListedAsync(CancellationToken ct = default)
+    {
+        var json = await _fetchIndex(ct);
+        if (json == null) return null;
+        var listed = ListedStable(json);
+        if (listed.Count > 0) Latest = listed[^1];
+        return listed;
+    }
+
     public async Task RunPeriodicallyAsync(CancellationToken ct)
     {
         while (!ct.IsCancellationRequested)
@@ -48,21 +58,27 @@ public sealed class UpdateChecker(Func<CancellationToken, Task<string?>>? fetchI
     }
 
     /// <summary>Newest listed, stable version in a registration index.</summary>
-    internal static Version? SelectLatestStable(string registrationJson)
+    internal static Version? SelectLatestStable(string registrationJson) =>
+        ListedStable(registrationJson) is { Count: > 0 } listed ? listed[^1] : null;
+
+    /// <summary>Listed, stable versions in a registration index, oldest first (empty if unreadable).</summary>
+    internal static List<Version> ListedStable(string registrationJson)
     {
         try
         {
             using var doc = JsonDocument.Parse(registrationJson);
-            if (!doc.RootElement.TryGetProperty("items", out var pages) || pages.ValueKind != JsonValueKind.Array) return null;
+            if (!doc.RootElement.TryGetProperty("items", out var pages) || pages.ValueKind != JsonValueKind.Array) return [];
             return pages.EnumerateArray().SelectMany(ListedVersions)
-                .Where(v => v != null && !v.Contains('-')) // pre-releases never auto-offered
+                .Where(v => v != null && !v.Contains('-')) // pre-releases never offered
                 .Select(v => Version.TryParse(v, out var parsed) ? Normalize(parsed) : null)
-                .Where(v => v != null)
-                .Max();
+                .OfType<Version>()
+                .Distinct()
+                .Order()
+                .ToList();
         }
         catch (Exception ex) when (ex is JsonException or InvalidOperationException or KeyNotFoundException)
         {
-            return null;
+            return [];
         }
     }
 

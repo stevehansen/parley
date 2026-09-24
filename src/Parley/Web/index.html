@@ -318,7 +318,12 @@
   const renderHead = () => {
     const h = $('conv-head'); h.replaceChildren();
     if (current === null) {
-      h.append(el('div', {}, el('h1', {}, 'All activity'), el('div', { class: 'desc' }, `${topics.length} topic${topics.length === 1 ? '' : 's'} · ${sessions.filter(s => s.listeners > 0).length} connected`)));
+      // Counted as the sidebar lists them: a session's direct line sits under Sessions, not Topics.
+      const direct = topics.filter(t => sessionOf(t.name)).length, plain = topics.length - direct;
+      const parts = [`${plain} topic${plain === 1 ? '' : 's'}`];
+      if (direct) parts.push(`${direct} direct`);
+      parts.push(`${sessions.filter(s => s.listeners > 0).length} connected`);
+      h.append(el('div', {}, el('h1', {}, 'All activity'), el('div', { class: 'desc' }, parts.join(' · '))));
       return;
     }
     const t = topics.find(x => x.name.toLowerCase() === current.toLowerCase());

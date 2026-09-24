@@ -15,24 +15,65 @@ namespace Parley.Update;
 /// </summary>
 internal static class UpdateCommand
 {
-    public static async Task<int> RunAsync(bool checkOnly)
+    /// <param name="args">
+    /// The arguments after <c>update</c>: <c>--check</c> only reports; <c>--to &lt;version&gt;</c>
+    /// installs that release; <c>--rollback</c> goes back to the version that ran before this one.
+    /// </param>
+    public static async Task<int> RunAsync(string[] args)
     {
         var current = UpdateChecker.Current;
-        var latest = await new UpdateChecker().CheckAsync();
-        if (latest == null)
+        var listed = await new UpdateChecker().ListedAsync();
+        if (listed == null)
         {
-            Console.WriteLine($"Could not reach NuGet to check for {UpdateChecker.PackageId} updates. Current: {current.ToString(3)}");
+            Console.WriteLine($"Could not reach NuGet to check for {UpdateChecker.PackageId} releases. Current: {current.ToString(3)}");
             return 1;
         }
-        if (latest <= current)
+
+        var toIndex = Array.IndexOf(args, "--to");
+        Version? target;
+        if (toIndex >= 0)
         {
-            Console.WriteLine($"Parley {current.ToString(3)} is up to date.");
-            return 0;
+            target = toIndex + 1 < args.Length && Version.TryParse(args[toIndex + 1], out var v) ? UpdateChecker.Normalize(v) : null;
+            if (target == null || !listed.Contains(target))
+            {
+                Console.WriteLine($"Not a listed {UpdateChecker.PackageId} release. Available: {string.Join(", ", listed.Select(x => x.ToString(3)))}");
+                return 1;
+            }
+        }
+        else if (args.Contains("--rollback"))
+        {
+            // Without history (installed by hand, or before history existed): the release below.
+            target = UpdateHistory.PredecessorOf(current) ?? listed.LastOrDefault(x => x < current);
+            if (target == null)
+            {
+                Console.WriteLine($"Nothing to roll back to: {current.ToString(3)} is the oldest release.");
+                return 1;
+            }
+        }
+        else
+        {
+            target = listed.LastOrDefault();
+            if (target == null || target <= current)
+            {
+                Console.WriteLine($"Parley {current.ToString(3)} is up to date.");
+                return 0;
+            }
         }
 
-        Console.WriteLine($"Update available: {current.ToString(3)} → {latest.ToString(3)}");
-        if (checkOnly) return 0;
+        if (target == current)
+        {
+            Console.WriteLine($"Parley {current.ToString(3)} is already installed.");
+            return 0;
+        }
+        Console.WriteLine(target > current
+            ? $"Update available: {current.ToString(3)} → {target.ToString(3)}"
+            : $"Rolling back: {current.ToString(3)} → {target.ToString(3)}");
+        if (args.Contains("--check")) return 0;
+        return await InstallAsync(current, target);
+    }
 
+    private static async Task<int> InstallAsync(Version current, Version target)
+    {
         var toolShim = ServiceManager.ToolShimPath();
         if (toolShim == null)
         {
@@ -40,13 +81,14 @@ internal static class UpdateCommand
             return 1;
         }
 
-        var version = latest.ToString(3);
+        var version = target.ToString(3);
+        var downgrade = target < current;
         var service = ServiceManager.IsInstalled();
         await StopHubAsync(service);
 
         ToolFiles.DeleteLeftovers(toolShim);
         var moved = OperatingSystem.IsWindows() ? ToolFiles.MoveInUseAside(toolShim) : [];
-        var (code, output) = DotnetToolUpdate(version);
+        var (code, output) = DotnetToolUpdate(version, downgrade);
         // dotnet can exit 0 having installed nothing (stale cache, odd sources): ask the new binary.
         if (code == 0 && InstalledVersion(toolShim) is var installed && installed != version)
         {
@@ -60,12 +102,13 @@ internal static class UpdateCommand
         if (service) ServiceManager.Start();
         else SelfProcess.StartDetached(toolShim, "serve --background");
 
+        if (code == 0) UpdateHistory.Append(current, target, rollback: downgrade);
         AppendLog(code == 0
-            ? $"updated {current.ToString(3)} to {version}"
-            : $"update {current.ToString(3)} to {version} FAILED:\n{output.Trim()}");
+            ? $"{(downgrade ? "rolled back" : "updated")} {current.ToString(3)} to {version}"
+            : $"{(downgrade ? "rollback" : "update")} {current.ToString(3)} to {version} FAILED:\n{output.Trim()}");
         Console.WriteLine(code == 0
-            ? $"Updated to {version}; the hub runs the new version. Open AI sessions switch when they restart."
-            : $"Update failed; still on {current.ToString(3)}.\n{output.Trim()}");
+            ? $"{(downgrade ? "Rolled back" : "Updated")} to {version}; the hub runs it now. Open AI sessions switch when they restart."
+            : $"{(downgrade ? "Rollback" : "Update")} failed; still on {current.ToString(3)}.\n{output.Trim()}");
         return code;
     }
 
@@ -117,11 +160,12 @@ internal static class UpdateCommand
         }
     }
 
-    private static (int code, string output) DotnetToolUpdate(string version)
+    private static (int code, string output) DotnetToolUpdate(string version, bool downgrade)
     {
         // --no-http-cache: right after a release, dotnet's cached package index doesn't list it yet.
         var psi = new ProcessStartInfo("dotnet",
-            $"tool update -g {UpdateChecker.PackageId} --version {version} --ignore-failed-sources --no-http-cache")
+            $"tool update -g {UpdateChecker.PackageId} --version {version} --ignore-failed-sources --no-http-cache"
+            + (downgrade ? " --allow-downgrade" : ""))
         {
             RedirectStandardOutput = true,
             RedirectStandardError = true,
