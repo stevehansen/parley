@@ -9,7 +9,7 @@
     <!-- dotnet tool packaging -->
     <PackAsTool>true</PackAsTool>
     <ToolCommandName>parley</ToolCommandName>
-    <PackageId>parley-mcp</PackageId>
+    <PackageId>HC.Parley</PackageId>
     <Version>0.1.0</Version>
 
     <Authors>Steve Hansen</Authors>

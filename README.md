@@ -19,7 +19,7 @@ Why channels: plain MCP notifications never reach the model, so any MCP-only des
 ## Install
 
 ```bash
-dotnet tool install -g parley-mcp
+dotnet tool install -g HC.Parley
 claude mcp add parley -s user -- parley mcp
 ```
 
