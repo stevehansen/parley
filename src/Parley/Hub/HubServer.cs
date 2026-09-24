@@ -33,7 +33,7 @@ namespace Parley.Hub;
 /// </summary>
 public static class HubServer
 {
-    private static readonly TimeSpan Heartbeat = TimeSpan.FromSeconds(25);
+    internal static readonly TimeSpan Heartbeat = TimeSpan.FromSeconds(25);
 
     public static WebApplication Build(CollabHub hub, int port, string bindAddress = "127.0.0.1", UpdateChecker? updates = null)
     {

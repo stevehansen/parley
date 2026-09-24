@@ -23,6 +23,9 @@ public sealed class McpShim
 {
     private static readonly TimeSpan ReconnectDelay = TimeSpan.FromSeconds(3);
 
+    /// <summary>Two missed hub heartbeats and a margin: the stream is dead, reconnect.</summary>
+    private static readonly TimeSpan StreamIdleTimeout = HubServer.Heartbeat * 2.5;
+
     private readonly string _session;
     private readonly string _workingDir;
     private readonly string _hubUrl;
@@ -176,14 +179,14 @@ public sealed class McpShim
                 response.EnsureSuccessStatusCode();
                 loggedDown = false;
                 await using var stream = await response.Content.ReadAsStreamAsync(ct);
-                await foreach (var (evt, data) in SseReader.ReadAsync(stream, ct))
+                await foreach (var (evt, data) in SseReader.ReadAsync(stream, StreamIdleTimeout, ct))
                     OnEvent(evt, data);
             }
             catch (OperationCanceledException) when (ct.IsCancellationRequested)
             {
                 break;
             }
-            catch (Exception ex) when (ex is HttpRequestException or IOException)
+            catch (Exception ex) when (ex is HttpRequestException or IOException or TimeoutException)
             {
                 if (!loggedDown) Log.Error("event stream lost; reconnecting", ex);
                 loggedDown = true;

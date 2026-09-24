@@ -176,7 +176,7 @@ public class PushDeliveryTests : IAsyncLifetime
         {
             try
             {
-                await foreach (var e in SseReader.ReadAsync(stream, ct)) log.Add(e);
+                await foreach (var e in SseReader.ReadAsync(stream, TimeSpan.FromMinutes(1), ct)) log.Add(e);
             }
             catch (OperationCanceledException) { }
             catch (IOException) { }
