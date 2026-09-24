@@ -21,6 +21,7 @@
     <RepositoryType>git</RepositoryType>
     <PackageTags>ai;mcp;claude-code;agents;collaboration;pubsub</PackageTags>
     <PackageReadmeFile>README.md</PackageReadmeFile>
+    <PackageIcon>icon.png</PackageIcon>
   </PropertyGroup>
 
   <ItemGroup>
@@ -30,6 +31,7 @@
   <ItemGroup>
     <EmbeddedResource Include="Web\index.html" LogicalName="Parley.Web.index.html" />
     <None Include="..\..\README.md" Pack="true" PackagePath="\" />
+    <None Include="..\..\assets\icon.png" Pack="true" PackagePath="\" />
   </ItemGroup>
 
 </Project>

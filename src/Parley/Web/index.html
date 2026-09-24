@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Parley</title>
-<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%234f46e5'/%3E%3Cpath d='M9 10h14a2 2 0 0 1 2 2v7a2 2 0 0 1-2 2h-8l-5 4v-4H9a2 2 0 0 1-2-2v-7a2 2 0 0 1 2-2z' fill='white'/%3E%3C/svg%3E">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%22108 116 1040 1040%22%3E%3Cstyle%3Epath%7Bfill:%234f46e5%7D%40media (prefers-color-scheme:dark)%7Bpath%7Bfill:%238b87ff%7D%7D%3C/style%3E%3Cdefs%3E%3Cmask id=%22gap%22 maskUnits=%22userSpaceOnUse%22 x=%220%22 y=%220%22 width=%221254%22 height=%221254%22%3E%3Crect width=%221254%22 height=%221254%22 fill=%22%23fff%22/%3E%3Cpath d=%22M470 900V600c0-38 26-55 52-55 22 0 38 10 53 25l65 68c30 30 87 22 87-48V300%22 style=%22fill:none;stroke:%23000;stroke-width:50;stroke-linecap:round;stroke-linejoin:round%22/%3E%3C/mask%3E%3CclipPath id=%22l%22%3E%3Cpath d=%22M0 0h727v590c0 70-57 78-87 48l-65-68c-15-15-31-25-53-25-26 0-52 17-52 55v654H0z%22/%3E%3C/clipPath%3E%3CclipPath id=%22r%22%3E%3Cpath d=%22M727 0h527v1254H470V600c0-38 26-55 52-55 22 0 38 10 53 25l65 68c30 30 87 22 87-48z%22/%3E%3C/clipPath%3E%3C/defs%3E%3Cg mask=%22url(%23gap)%22%3E%3Cg clip-path=%22url(%23l)%22%3E%3Cpath d=%22M273 330h245a185 185 0 0 1 185 185v270H273a150 150 0 0 1-150-150V480a150 150 0 0 1 150-150z%22/%3E%3Cpath d=%22M286 760v100c0 14 12 20 24 12l150-112z%22/%3E%3C/g%3E%3Cg clip-path=%22url(%23r)%22%3E%3Cpath d=%22M497 422h486a150 150 0 0 1 150 150v133a145 145 0 0 1-145 145H677a180 180 0 0 1-180-180z%22/%3E%3Cpath d=%22M790 830l148 106c12 8 32 6 32-10V830z%22/%3E%3C/g%3E%3C/g%3E%3C/svg%3E">
 <style>
   :root {
     --bg: #f7f7f8; --panel: #ffffff; --panel-2: #f1f1f4; --border: #e4e4e9;
@@ -49,7 +49,7 @@
     padding: 10px 16px; background: var(--panel); border-bottom: 1px solid var(--border);
   }
   .brand { display: flex; align-items: center; gap: 8px; font-weight: 650; font-size: 15px; }
-  .brand svg { width: 22px; height: 22px; }
+  .brand svg { width: 34px; height: 21px; }
   .status { display: inline-flex; align-items: center; gap: 6px; color: var(--muted); font-size: 12.5px; }
   .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--faint); flex: none; }
   .dot.on { background: var(--ok); }
@@ -153,7 +153,7 @@
 <body>
 <header class="top">
   <div class="brand">
-    <svg viewBox="0 0 32 32" aria-hidden="true"><rect width="32" height="32" rx="8" fill="var(--accent)"/><path d="M9 10h14a2 2 0 0 1 2 2v7a2 2 0 0 1-2 2h-8l-5 4v-4H9a2 2 0 0 1-2-2v-7a2 2 0 0 1 2-2z" fill="var(--panel)"/></svg>
+    <svg viewBox="108 316 1040 640" aria-hidden="true" style="fill:var(--accent)"><defs><mask id="lg-gap" maskUnits="userSpaceOnUse" x="0" y="0" width="1254" height="1254"><rect width="1254" height="1254" fill="#fff"/><path d="M470 900V600c0-38 26-55 52-55 22 0 38 10 53 25l65 68c30 30 87 22 87-48V300" style="fill:none;stroke:#000;stroke-width:50;stroke-linecap:round;stroke-linejoin:round"/></mask><clipPath id="lg-l"><path d="M0 0h727v590c0 70-57 78-87 48l-65-68c-15-15-31-25-53-25-26 0-52 17-52 55v654H0z"/></clipPath><clipPath id="lg-r"><path d="M727 0h527v1254H470V600c0-38 26-55 52-55 22 0 38 10 53 25l65 68c30 30 87 22 87-48z"/></clipPath></defs><g mask="url(#lg-gap)"><g clip-path="url(#lg-l)"><path d="M273 330h245a185 185 0 0 1 185 185v270H273a150 150 0 0 1-150-150V480a150 150 0 0 1 150-150z"/><path d="M286 760v100c0 14 12 20 24 12l150-112z"/></g><g clip-path="url(#lg-r)"><path d="M497 422h486a150 150 0 0 1 150 150v133a145 145 0 0 1-145 145H677a180 180 0 0 1-180-180z"/><path d="M790 830l148 106c12 8 32 6 32-10V830z"/></g></g></svg>
     Parley
   </div>
   <span class="status" id="status"><span class="dot" id="status-dot"></span><span class="label" id="status-label">Connecting…</span></span>

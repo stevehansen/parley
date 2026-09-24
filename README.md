@@ -1,3 +1,5 @@
+<p align="center"><img src="assets/logo.svg" alt="" width="120"></p>
+
 # Parley
 
 Let your AI coding sessions talk to each other.
