@@ -1,3 +1,4 @@
+using System.Net;
 using System.Net.Http.Headers;
 using System.Text;
 using System.Text.Json;
@@ -29,14 +30,16 @@ public sealed class McpShim
     private readonly string _session;
     private readonly string _workingDir;
     private readonly string _hubUrl;
-    private readonly HttpClient _http = new() { Timeout = Timeout.InfiniteTimeSpan };
+    private readonly HttpClient _http;
     private readonly Action<string> _write;
     private readonly SemaphoreSlim _hubStart = new(1, 1);
     private int _lastPushedId = -1;
     private DateTime _hubStartedAt = DateTime.MinValue;
 
-    public McpShim(string session, string workingDir, string hubUrl, Action<string> write)
+    /// <param name="token">This device's token for a hub on another machine; null for a local hub.</param>
+    public McpShim(string session, string workingDir, string hubUrl, Action<string> write, string? token = null)
     {
+        _http = ParleyConfig.CreateHubClient(Timeout.InfiniteTimeSpan, token);
         _session = session;
         _workingDir = workingDir;
         _hubUrl = hubUrl;
@@ -61,7 +64,7 @@ public sealed class McpShim
         }
 
         var cwd = Environment.CurrentDirectory;
-        var shim = new McpShim(DefaultSessionName(cwd), cwd, ParleyConfig.HubUrl, Write);
+        var shim = new McpShim(DefaultSessionName(cwd), cwd, ParleyConfig.HubUrl, Write, ParleyConfig.HubToken);
         Log.Info($"mcp shim for session '{shim._session}' ({cwd}) → {shim._hubUrl}");
 
         using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
@@ -123,7 +126,7 @@ public sealed class McpShim
                     instructions = AgentInstructions.WithPush,
                 })),
                 "ping" => Json.Serialize(JsonRpcResponse.Success(request.Id, new { })),
-                "tools/list" or "tools/call" => await ForwardAsync(line, ct),
+                "tools/list" or "tools/call" => await ForwardAsync(request, line, ct),
                 _ => Json.Serialize(JsonRpcResponse.Fail(request.Id, -32601, $"Method not found: {request.Method}")),
             };
         }
@@ -133,7 +136,7 @@ public sealed class McpShim
         }
     }
 
-    private async Task<string> ForwardAsync(string line, CancellationToken ct)
+    private async Task<string> ForwardAsync(JsonRpcRequest request, string line, CancellationToken ct)
     {
         HttpResponseMessage response;
         try
@@ -146,7 +149,14 @@ public sealed class McpShim
             response = await PostAsync(line, ct);
         }
         using (response)
-            return await response.Content.ReadAsStringAsync(ct);
+        {
+            var body = await response.Content.ReadAsStringAsync(ct);
+            // A shared hub refusing this device (unpaired, wrong network) answers in plain JSON, not JSON-RPC.
+            if (response.StatusCode is HttpStatusCode.Unauthorized or HttpStatusCode.Forbidden)
+                return Json.Serialize(JsonRpcResponse.Fail(request.Id, -32603,
+                    $"The Parley hub at {_hubUrl} refused this device ({(int)response.StatusCode}): {ErrorOf(body)}"));
+            return body;
+        }
     }
 
     private Task<HttpResponseMessage> PostAsync(string line, CancellationToken ct)
@@ -276,6 +286,19 @@ public sealed class McpShim
         catch (Exception ex) when (ex is HttpRequestException or OperationCanceledException && !ct.IsCancellationRequested)
         {
             return false;
+        }
+    }
+
+    private static string ErrorOf(string body)
+    {
+        try
+        {
+            using var doc = JsonDocument.Parse(body);
+            return doc.RootElement.TryGetProperty("error", out var e) ? e.GetString() ?? body : body;
+        }
+        catch (JsonException)
+        {
+            return body;
         }
     }
 

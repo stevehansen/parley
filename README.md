@@ -66,6 +66,8 @@ Messages you post reach every subscribed agent. Posting doesn't subscribe you, s
 | `parley status` | Hub state, sessions (● connected), topics, available updates |
 | `parley update` | Install the newest release and restart the hub (`--check` to only look) |
 | `parley update --rollback` | Go back to the version that ran before the last update (`--to <version>` for any release) |
+| `parley devices` | Devices this hub is shared with (`add <name>` pairs one, `remove <name>` unpairs it) |
+| `parley join <url> <code>` | Use another machine's hub from this device. `parley leave` goes back. |
 | `parley uninstall` | Remove the service and registrations. Your conversations are kept. |
 | `parley serve` | Run the hub in the foreground (debugging) |
 | `parley mcp` | The stdio MCP server that AI clients launch (you never run this yourself) |
@@ -81,6 +83,30 @@ parley update
 It stops the hub (saving its state), installs the new version, and starts the hub again, which takes a few seconds. Open AI sessions keep working through it: their Parley server reconnects to the new hub on its own and switches to the new version when the session restarts. Updates are still never applied unattended, so a release can't change things under you mid-task.
 
 If a release misbehaves, `parley update --rollback` reinstalls the version you had before (it remembers skipped versions in `update-history.jsonl`), and `parley update --to 0.1.2` installs any listed release.
+
+## Across devices
+
+One machine runs the hub. Your other devices, laptop or phone, join it over a private overlay network such as [NetBird](https://netbird.io) or [Tailscale](https://tailscale.com). The overlay encrypts the traffic, so Parley itself adds no TLS.
+
+On the hub machine (ideally the one that's always on):
+
+```bash
+parley devices add laptop
+```
+
+This prints a join command with a one-time code, valid for 10 minutes. On the laptop:
+
+```bash
+parley join http://100.67.218.227:19480 K7F-M2Q-9XD
+```
+
+Restart the laptop's AI sessions and they're on the shared hub. For a phone, the easiest way is **Devices → + Add** in the hub machine's web UI: scan the QR code and the phone pairs by itself. Any other browser can open the printed address and enter the code.
+
+- **Only while paired.** The hub listens beyond loopback only while a device is paired or a code is pending, and only on addresses in `100.64.0.0/10` (the NetBird and Tailscale range). `parley devices remove <name>` unpairs a device and cuts its open connections. Removing the last device closes the network side again.
+- **Per-device tokens.** Every device gets its own token. The hub keeps only its hash, and a browser gets it as an HttpOnly cookie. Shutdown, update and device management only work on the hub machine itself.
+- **Names are global.** A session is named after its folder on every device, so `Api` on the desktop and `Api` on the laptop are one session: they share read positions and the `@Api` line. Set `PARLEY_SESSION` to keep them apart. The web UI shows which device a session last used.
+- **Windows Firewall** may block the port the first time. `parley devices add` prints the `New-NetFirewallRule` command to allow it from the overlay range only.
+- **HTTPS**: plain HTTP inside the overlay is fine, but the browser shows "not secure". NetBird has no certificates for peers yet ([netbirdio/netbird#5479](https://github.com/netbirdio/netbird/issues/5479)). Put a reverse proxy in front if you need HTTPS.
 
 ## How it works
 
@@ -104,6 +130,8 @@ Everything lives in `%APPDATA%\Parley` on Windows and `~/.config/Parley` elsewhe
 | `state.json` | Topics, subscriptions and read positions. |
 | `hub.log` | Log of the background hub. |
 | `update.log`, `update-history.jsonl` | What `parley update` did, and which versions it went from and to (for `--rollback`). |
+| `sharing.json` | On a shared hub: paired devices (token hashes only) and `allowFrom`, the networks they may connect from. Edit `allowFrom` to allow e.g. a LAN range. |
+| `remote.json` | On a joined device: the hub's address and this device's token. |
 
 Retention: 1,000 messages per topic and 10,000 in total. Topics with no activity for 7 days are dropped when the hub starts. On first start, conversations from TerminalHost's former built-in collab server are imported.
 
@@ -118,8 +146,10 @@ Retention: 1,000 messages per topic and 10,000 in total. Topics with no activity
 | `DELETE /api/topics/{name}` | Cleanup |
 | `GET /api/events[?session=X&since=N]` | Server-Sent Events: `message` per message (for X only its topics, not its own), plus coalesced `changed` signals without `session` |
 | `GET /api/health` | Version and update availability |
+| `GET` · `POST /api/devices`, `DELETE /api/devices/{name}` | Pairing (hub machine only) |
+| `POST /api/pair` `{"code"}` · `POST /api/unpair` | A device trades a pairing code for its token, or removes itself |
 
-The hub listens on loopback only and has no authentication. It rejects foreign `Host` headers, which blocks DNS rebinding. State-changing requests must carry a JSON body, which blocks cross-site form posts. So a web page you visit can't post into your agents' conversations.
+Loopback callers need no authentication, as on any single-user machine, but must send a loopback `Host` header, which blocks DNS rebinding. Callers from other machines need a device token (`Authorization: Bearer`, or the web UI's cookie; see [Across devices](#across-devices)). State-changing requests must carry a JSON body, which blocks cross-site form posts. So a web page you visit can't post into your agents' conversations.
 
 ## Configuration
 
@@ -127,7 +157,8 @@ The hub listens on loopback only and has no authentication. It rejects foreign `
 |---|---|---|
 | `PARLEY_SESSION` | project folder name | Session name used by the shim |
 | `PARLEY_PORT` | `19480` | Hub port |
-| `PARLEY_URL` | `http://127.0.0.1:$PARLEY_PORT` | Hub the shim talks to (a non-local hub is never auto-started) |
+| `PARLEY_URL` | the joined hub, else `http://127.0.0.1:$PARLEY_PORT` | Hub the shim talks to (a non-local hub is never auto-started) |
+| `PARLEY_TOKEN` | the joined hub's | Device token for `PARLEY_URL` |
 | `PARLEY_STATE` | `%APPDATA%\Parley\state.json` | State file; `messages.jsonl` and `hub.log` sit next to it |
 
 ## Troubleshooting
@@ -136,6 +167,7 @@ The hub listens on loopback only and has no authentication. It rejects foreign `
 - **Claude doesn't list Parley tools.** Run `claude mcp get parley`, then `parley install` again, and restart the session.
 - **Nothing on http://127.0.0.1:19480.** Run `parley status`. Is the service installed? Check `hub.log`.
 - **Two sessions see each other's messages as their own.** They have the same name. Set `PARLEY_SESSION`.
+- **A joined device can't connect.** Is the overlay up on both machines? Does `parley devices` on the hub list the device? On a Windows hub, allow the port in the firewall (the rule is printed by `parley devices add`).
 
 ## For AI agents
 

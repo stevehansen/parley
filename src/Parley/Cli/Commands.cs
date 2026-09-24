@@ -1,6 +1,8 @@
 using System.Diagnostics;
 using System.Net.Http.Json;
 using Parley.Hub;
+using Parley.Mcp;
+using Parley.Sharing;
 using Parley.Update;
 
 namespace Parley.Cli;
@@ -16,13 +18,31 @@ internal static class Commands
     /// </summary>
     public static int Install()
     {
-        var self = SelfCommand();
-        var found = false;
-
-        if (ServiceManager.ToolShimPath() is { } shim)
+        if (JoinedHub.Load() is { } joined)
+            Console.WriteLine($"Hub service: not needed, this device uses the hub at {joined.Url} (`parley leave` to run one here)");
+        else if (ServiceManager.ToolShimPath() is { } shim)
             Console.WriteLine($"Hub service: {ServiceManager.Install(shim)}");
         else
             Console.WriteLine("Hub service: skipped (install Parley as a global tool first: dotnet tool install -g HC.Parley). The hub still starts on demand.");
+
+        if (!RegisterClients()) return 1;
+
+        Console.WriteLine($"""
+
+            Done. Restart your AI sessions to load Parley. Web UI: {ParleyConfig.HubUrl}/
+
+            For push delivery (messages wake an idle Claude Code session), start Claude with:
+              claude --dangerously-load-development-channels server:{ServerName}
+            Without it, agents see unread messages in tool results and can wait with read_messages.
+            """);
+        return 0;
+    }
+
+    /// <summary>Registers the shim with every AI client on PATH; false (with manual instructions) when none was found.</summary>
+    public static bool RegisterClients()
+    {
+        var self = SelfCommand();
+        var found = false;
 
         if (ExternalTool.Find("claude") is { } claude)
         {
@@ -54,18 +74,8 @@ internal static class Commands
                   claude mcp add {ServerName} -s user -- {self}
                   codex mcp add {ServerName} -- {self}
                 """);
-            return 1;
         }
-
-        Console.WriteLine($"""
-
-            Done. Restart your AI sessions to load Parley. Web UI: {ParleyConfig.HubUrl}/
-
-            For push delivery (messages wake an idle Claude Code session), start Claude with:
-              claude --dangerously-load-development-channels server:{ServerName}
-            Without it, agents see unread messages in tool results and can wait with read_messages.
-            """);
-        return 0;
+        return found;
     }
 
     public static int Uninstall()
@@ -82,30 +92,42 @@ internal static class Commands
 
     public static async Task<int> StatusAsync()
     {
-        using var http = new HttpClient { Timeout = TimeSpan.FromSeconds(3) };
+        using var http = ParleyConfig.CreateHubClient(TimeSpan.FromSeconds(3), ParleyConfig.HubToken);
         var url = ParleyConfig.HubUrl;
+        var joined = JoinedHub.Load();
         List<Session>? sessions;
         List<Topic>? topics;
+        System.Text.Json.JsonElement health;
         try
         {
+            health = await http.GetFromJsonAsync<System.Text.Json.JsonElement>($"{url}/api/health");
             sessions = await http.GetFromJsonAsync<List<Session>>($"{url}/api/sessions");
             topics = await http.GetFromJsonAsync<List<Topic>>($"{url}/api/topics");
         }
         catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException)
         {
-            Console.WriteLine($"Hub: not running at {url} (it starts with the first AI session that loads Parley)");
+            Console.WriteLine(joined != null
+                ? $"Hub: can't use {url} ({ex.Message}). Is the overlay network (NetBird, Tailscale) up, and is this device still paired?"
+                : $"Hub: not running at {url} (it starts with the first AI session that loads Parley)");
             return 1;
         }
 
         Console.WriteLine($"Hub: running at {url} — web UI: {url}/");
-        Console.WriteLine($"Service: {(ServiceManager.IsInstalled() ? "installed (starts at logon)" : "not installed (hub starts on demand; `parley install` to keep it running)")}");
-        var health = await http.GetFromJsonAsync<System.Text.Json.JsonElement>($"{url}/api/health");
+        if (joined != null)
+            Console.WriteLine($"Joined: as '{joined.Device}' (`parley leave` to use a hub on this machine again)");
+        else
+            Console.WriteLine($"Service: {(ServiceManager.IsInstalled() ? "installed (starts at logon)" : "not installed (hub starts on demand; `parley install` to keep it running)")}");
+        if (health.TryGetProperty("apiVersion", out var api) && api.GetInt32() != Protocol.ApiVersion)
+            Console.WriteLine($"Version: the hub runs {health.GetProperty("version").GetString()}, this device {Protocol.Version}; update the older one (`parley update`)");
         if (health.TryGetProperty("updateAvailable", out var up) && up.GetBoolean())
-            Console.WriteLine($"Update: {health.GetProperty("latest").GetString()} is available — run `parley update`");
+            Console.WriteLine($"Update: {health.GetProperty("latest").GetString()} is available — run `parley update`{(joined != null ? " on the hub machine" : "")}");
+        if (joined == null && await SharingCommands.PairedDevicesAsync() is { Count: > 0 } paired)
+            Console.WriteLine($"Shared with: {string.Join(", ", paired.Select(d => d.CodeExpiresAt != null ? d.Name + " (pairing)" : d.Name))} (`parley devices`)");
         Console.WriteLine();
         Console.WriteLine("Sessions (● = connected, receives pushes):");
+        var devicesShown = sessions?.Select(s => s.Device).Distinct().Count() > 1;
         foreach (var s in sessions ?? [])
-            Console.WriteLine($"  {(s.Listeners > 0 ? "●" : "○")} {s.Name,-24} {s.WorkingDir}  (last seen {s.LastSeen.ToLocalTime():g})");
+            Console.WriteLine($"  {(s.Listeners > 0 ? "●" : "○")} {s.Name,-24} {(devicesShown ? $"[{s.Device}] " : "")}{s.WorkingDir}  (last seen {s.LastSeen.ToLocalTime():g})");
         if (sessions is not { Count: > 0 }) Console.WriteLine("  (none)");
 
         Console.WriteLine();

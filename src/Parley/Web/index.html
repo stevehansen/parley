@@ -141,11 +141,38 @@
   .composer input:focus, .composer textarea:focus { outline: 2px solid var(--accent); outline-offset: -1px; border-color: transparent; }
   .hint { color: var(--faint); font-size: 12px; }
 
+  .nav-item.device { cursor: default; }
+  .nav-item.device:hover { background: none; }
+  .nav-item .x { border: 0; background: none; color: var(--faint); padding: 0 4px; font-size: 15px; line-height: 1.2; }
+  .nav-item .x:hover { color: var(--danger); }
+
+  /* Pairing a browser with a hub on another machine */
+  .pair { display: grid; place-items: start center; padding: 12vh 16px; }
+  .pair[hidden] { display: none; }
+  .pair-card { width: min(420px, 100%); background: var(--panel); border: 1px solid var(--border); border-radius: 12px; padding: 20px; box-shadow: var(--shadow); display: grid; gap: 12px; }
+  .pair-card h2 { margin: 0; font-size: 17px; }
+  .pair-card p { margin: 0; color: var(--muted); }
+  .pair-card input { font: 600 18px/1.4 ui-monospace, "Cascadia Code", Consolas, monospace; letter-spacing: .08em; text-transform: uppercase; color: var(--text); background: var(--bg); border: 1px solid var(--border); border-radius: 8px; padding: 8px 12px; width: 100%; }
+  .error { color: var(--danger); font-size: 13px; }
+  body.unpaired .layout { display: none; }
+
+  dialog { border: 1px solid var(--border); border-radius: 12px; background: var(--panel); color: var(--text); padding: 20px; width: min(460px, calc(100vw - 32px)); box-shadow: var(--shadow); }
+  dialog::backdrop { background: rgba(0,0,0,.35); }
+  dialog h2 { margin: 0 0 8px; font-size: 17px; }
+  dialog p { margin: 8px 0; color: var(--muted); }
+  dialog .code { font: 650 26px/1.3 ui-monospace, "Cascadia Code", Consolas, monospace; letter-spacing: .1em; margin: 6px 0; }
+  dialog pre { background: var(--code-bg); border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px; white-space: pre-wrap; overflow-wrap: anywhere; margin: 6px 0; }
+  dialog .actions { display: flex; justify-content: flex-end; margin-top: 12px; }
+  dialog .qr { display: block; width: 200px; height: 200px; margin: 4px auto 0; background: #fff; border-radius: 8px; image-rendering: pixelated; }
+
   @media (max-width: 760px) {
     .layout { grid-template-columns: 1fr; grid-template-rows: auto 1fr; }
     aside { border-right: 0; border-bottom: 1px solid var(--border); max-height: 38vh; }
     .messages, .composer, .conv-head { padding-left: 16px; padding-right: 16px; }
-    .status .label { display: none; }
+    .status .label, .hint { display: none; }
+    .composer .row:first-child { flex-wrap: wrap; }
+    .composer input { width: 120px; }
+    .update { font-size: 12px; }
   }
 </style>
 </head>
@@ -177,6 +204,10 @@
     <div id="topics"></div>
     <div class="section-title">Sessions</div>
     <div id="sessions"></div>
+    <div id="devices-section" hidden>
+      <div class="section-title">Devices <button type="button" id="add-device">+ Add</button></div>
+      <div id="devices"></div>
+    </div>
   </aside>
 
   <main>
@@ -197,6 +228,22 @@
     </div>
   </main>
 </div>
+
+<section class="pair" id="pair" hidden>
+  <form class="pair-card" id="pair-form">
+    <h2>Pair this browser</h2>
+    <p>This Parley hub runs on another machine. There, run <code>parley devices add &lt;name&gt;</code> (or use <b>Devices → Add</b> in its web UI) and enter the code here.</p>
+    <input id="pair-code" maxlength="11" autocomplete="one-time-code" autocapitalize="characters" spellcheck="false" placeholder="K7F-M2Q-9XD" aria-label="Pairing code">
+    <button class="btn primary" type="submit" id="pair-btn">Pair</button>
+    <div class="error" id="pair-error"></div>
+  </form>
+</section>
+
+<dialog id="device-dialog">
+  <h2 id="device-title"></h2>
+  <div id="device-body"></div>
+  <div class="actions"><button class="btn" type="button" id="device-close">Done</button></div>
+</dialog>
 
 <script>
 (() => {
@@ -221,9 +268,16 @@
 
   const api = async (path, opts) => {
     const r = await fetch(path, opts);
-    if (!r.ok) throw new Error(r.status + ' ' + path);
+    if (!r.ok) {
+      const err = new Error(r.status + ' ' + path);
+      err.status = r.status;
+      try { err.message = (await r.json()).error || err.message; } catch {}
+      throw err;
+    }
     return r.status === 204 || r.status === 202 ? null : r.json();
   };
+  const postJson = (path, body) => api(path, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+  let health = null; // the last /api/health; `local` says whether this browser is on the hub machine
 
   // ---- rendering helpers -------------------------------------------------
   const el = (tag, props = {}, ...children) => {
@@ -285,6 +339,8 @@
 
     const sl = $('sessions'); sl.replaceChildren();
     const ss = [...sessions].sort((a, b) => (b.listeners > 0) - (a.listeners > 0) || new Date(b.lastSeen) - new Date(a.lastSeen));
+    // Which machine a session runs on only matters once there is more than one.
+    const showDevice = new Set(sessions.map(x => x.device)).size > 1;
     if (!ss.length) sl.append(el('div', { class: 'empty-side' }, 'No agent has called in since the hub started.'));
     for (const s of ss) {
       const live = s.listeners > 0;
@@ -297,10 +353,63 @@
         el('span', { class: 'dot' + (live ? ' on' : '') }),
         el('span', { class: 'body' },
           el('div', { class: 'name' }, s.name),
-          el('div', { class: 'sub' }, (live ? 'connected' : 'seen ' + ago(s.lastSeen)) + (s.workingDir ? ' · ' + s.workingDir : ''))),
+          el('div', { class: 'sub' }, (live ? 'connected' : 'seen ' + ago(s.lastSeen)) + (showDevice && s.device ? ' · ' + s.device : '') + (s.workingDir ? ' · ' + s.workingDir : ''))),
         dm ? el('span', { class: 'count' }, String(dm.messageCount)) : null));
     }
+    renderDevices();
   };
+
+  // ---- devices (hub machine only) ------------------------------------------
+  let devices = [];
+  const renderDevices = () => {
+    $('devices-section').hidden = !health?.local;
+    if (!health?.local) return;
+    const dl = $('devices'); dl.replaceChildren();
+    if (!devices.length) dl.append(el('div', { class: 'empty-side' }, 'Only this machine. Add a laptop or phone on your NetBird or Tailscale network.'));
+    for (const d of devices) {
+      const sub = d.codeExpiresAt ? 'waiting for its code'
+        : (d.lastSeen ? 'seen ' + ago(d.lastSeen) : 'paired, not seen yet') + (d.version ? ' · v' + d.version : '');
+      dl.append(el('div', { class: 'nav-item device' },
+        el('span', { class: 'hash' }, '▢'),
+        el('span', { class: 'body' }, el('div', { class: 'name' }, d.name), el('div', { class: 'sub' }, sub)),
+        el('button', { class: 'x', type: 'button', title: 'Unpair ' + d.name, 'aria-label': 'Unpair ' + d.name, onclick: () => removeDevice(d.name) }, '×')));
+    }
+  };
+  let pairing = null; // the device the Add dialog shows a code for
+  const refreshDevices = async () => {
+    if (!health?.local) return;
+    devices = await api('/api/devices');
+    renderDevices();
+    // Its code was redeemed: the dialog has done its job.
+    if (pairing && devices.some(d => d.name === pairing && !d.codeExpiresAt)) $('device-dialog').close();
+  };
+  const removeDevice = async (name) => {
+    if (!confirm(`Unpair ${name}? It loses access to this hub right away.`)) return;
+    await api('/api/devices/' + encodeURIComponent(name), { method: 'DELETE' });
+    await refreshDevices();
+  };
+  $('add-device').onclick = async () => {
+    const name = prompt('Name for the new device (e.g. laptop, phone):');
+    if (!name || !name.trim()) return;
+    let r;
+    try { r = await postJson('/api/devices', { name: name.trim() }); }
+    catch (err) { alert(err.message); return; }
+    const url = r.urls[0];
+    pairing = name.trim().toLowerCase();
+    $('device-title').textContent = 'Pair ' + pairing;
+    $('device-body').replaceChildren(
+      r.qr ? el('img', { class: 'qr', src: r.qr, alt: 'QR code that opens this hub and pairs the device' }) : null,
+      r.qr ? el('p', {}, 'Scan it with the phone\'s camera: the page opens and pairs by itself.') : null,
+      el('div', { class: 'code' }, r.code),
+      el('p', {}, 'Single use, valid for 10 minutes. This closes by itself once the device is paired.'),
+      url ? el('p', {}, 'Or in a browser on that device, open ', el('b', {}, url + '/'), ' and enter the code. Or from a terminal there:')
+          : el('p', { class: 'error' }, `This machine has no address in ${r.allowFrom.join(', ')} yet. Is NetBird (or Tailscale) connected? From a terminal on that device:`),
+      el('pre', {}, `parley join ${url || 'http://<this machine>:' + location.port} ${r.code}`));
+    $('device-dialog').showModal();
+    refreshDevices().catch(() => {});
+  };
+  $('device-close').onclick = () => $('device-dialog').close();
+  $('device-dialog').addEventListener('close', () => { pairing = null; });
   const same = (a, b) => a != null && b != null && a.toLowerCase() === b.toLowerCase();
   // The listed session a direct topic ("@name") belongs to, if any.
   const sessionOf = (topic) => topic?.startsWith('@') ? sessions.find(s => same('@' + s.name, topic)) : undefined;
@@ -456,15 +565,19 @@
   const refreshMeta = async () => {
     [topics, sessions] = await Promise.all([api('/api/topics'), api('/api/sessions')]);
     render(false);
+    refreshDevices().catch(() => {});
   };
   const refreshAll = async () => {
     const [t, s, m, h] = await Promise.all([api('/api/topics'), api('/api/sessions'), api('/api/messages?count=500'), api('/api/health')]);
-    topics = t; sessions = s; messages = m;
-    $('version').textContent = 'v' + h.version;
+    topics = t; sessions = s; messages = m; health = h;
+    $('version').textContent = 'v' + h.version + (h.local ? '' : ' · ' + h.device);
     const up = h.updateAvailable;
     $('update').classList.toggle('show', !!up);
-    if (up) $('update-text').textContent = `Parley ${h.latest} is available`;
+    // Updating restarts the hub, so only the hub machine gets the button.
+    $('update-btn').hidden = !h.local;
+    if (up) $('update-text').textContent = h.local ? `Parley ${h.latest} is available` : `Parley ${h.latest} is available: run parley update on the hub machine`;
     render(true);
+    refreshDevices().catch(() => {});
   };
 
   let metaTimer = null;
@@ -484,11 +597,61 @@
       renderMessages(false); scheduleMeta();
     });
     es.addEventListener('changed', scheduleMeta);
-    es.onerror = () => setStatus('retry'); // EventSource reconnects on its own
+    es.onerror = () => {
+      setStatus('retry');
+      // EventSource retries a dropped stream on its own, but gives up for good on an error
+      // status: this browser was unpaired, or the hub is between restarts.
+      if (es.readyState === EventSource.CLOSED) setTimeout(start, 3000);
+    };
+  };
+
+  // ---- pairing -------------------------------------------------------------
+  const showPairing = () => {
+    document.body.classList.add('unpaired');
+    $('pair').hidden = false;
+    $('status-dot').className = 'dot'; $('status-label').textContent = 'Not paired'; $('version').textContent = '';
+    const m = location.hash.match(/^#\/pair\/(.+)$/);
+    if (m) $('pair-code').value = formatCode(decodeURIComponent(m[1]));
+    // Opened from the Add dialog's QR code: the code is complete, so pair right away.
+    if ($('pair-code').value.length === 11) $('pair-form').requestSubmit();
+    else $('pair-code').focus();
+  };
+  // Codes read as K7F-M2Q-9XD: the dashes appear as you type, whatever you type or paste.
+  const formatCode = (raw) => raw.toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 9).replace(/(.{3})(?=.)/g, '$1-');
+  $('pair-code').addEventListener('input', (e) => {
+    const input = e.target;
+    const typed = input.value.slice(0, input.selectionStart).replace(/[^A-Za-z0-9]/g, '').length;
+    input.value = formatCode(input.value);
+    let caret = 0;
+    for (let seen = 0; caret < input.value.length && seen < typed; caret++) if (input.value[caret] !== '-') seen++;
+    input.setSelectionRange(caret, caret);
+  });
+  $('pair-form').onsubmit = async (e) => {
+    e.preventDefault();
+    $('pair-btn').disabled = true; $('pair-error').textContent = '';
+    try {
+      await postJson('/api/pair', { code: $('pair-code').value, cookie: true });
+      location.hash = '#/';
+      location.reload();
+    } catch (err) {
+      $('pair-error').textContent = err.status === 403 ? 'That code is wrong or has expired. Create a new one on the hub machine.' : 'Could not pair: ' + err.message;
+      $('pair-btn').disabled = false;
+    }
+  };
+
+  // Paired, or on the hub machine: the live view. Otherwise the pairing form.
+  const start = async () => {
+    try {
+      health = await api('/api/health');
+    } catch (err) {
+      if (err.status === 401) { showPairing(); return; }
+      setStatus('retry'); setTimeout(start, 3000); return;
+    }
+    connect();
   };
 
   fromHash();
-  connect();
+  start();
   setInterval(() => renderSidebar(), 60e3); // keep "seen 5 min ago" honest
 })();
 </script>

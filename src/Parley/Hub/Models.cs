@@ -17,6 +17,13 @@ public class Session
     [JsonPropertyName("lastSeen")]
     public DateTime LastSeen { get; set; } = DateTime.UtcNow;
 
+    /// <summary>
+    /// The machine this session last called or listened from: the hub's own name, or a paired
+    /// device's. One name used on two devices is one session, so this follows the latest.
+    /// </summary>
+    [JsonPropertyName("device")]
+    public string? Device { get; set; }
+
     /// <summary>Open push streams for this session; &gt; 0 means messages reach it without polling.</summary>
     [JsonPropertyName("listeners")]
     public int Listeners { get; set; }

@@ -21,8 +21,9 @@ public sealed class HttpMcpEndpoint(CollabHub hub)
 
     public sealed record Result(int StatusCode, string? Body, string? McpSessionId);
 
+    /// <param name="device">The machine the call came from, shown with the session.</param>
     public async Task<Result> HandleAsync(string body, string? sessionHeader, string? mcpSessionId,
-        string? workingDirHeader, CancellationToken ct)
+        string? workingDirHeader, string? device, CancellationToken ct)
     {
         JsonRpcRequest? request;
         try
@@ -69,7 +70,7 @@ public sealed class HttpMcpEndpoint(CollabHub hub)
             issuedId = mcpSessionId;
         }
 
-        hub.EnsureSession(session, workingDirHeader);
+        hub.EnsureSession(session, workingDirHeader, device: device);
 
         if (request.IsNotification)
             return new Result(202, null, issuedId);

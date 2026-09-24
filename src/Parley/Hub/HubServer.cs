@@ -1,3 +1,4 @@
+using System.Net;
 using System.Text;
 using System.Text.Json;
 using System.Threading.Channels;
@@ -7,12 +8,14 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Parley.Mcp;
+using Parley.Sharing;
 using Parley.Update;
 
 namespace Parley.Hub;
 
 /// <summary>
-/// The hub process: one <see cref="CollabHub"/> behind a loopback HTTP API.
+/// The hub process: one <see cref="CollabHub"/> behind an HTTP API on loopback and, while shared,
+/// on the overlay-network addresses of <see cref="HubEndpoints"/> too.
 ///
 ///   POST /mcp                      MCP Streamable HTTP (see <see cref="HttpMcpEndpoint"/>)
 ///   GET  /api/health               liveness probe used by the shim before auto-starting a hub
@@ -21,27 +24,51 @@ namespace Parley.Hub;
 ///   DELETE /api/topics/{name}      delete a topic and its messages
 ///   POST /api/update               install the newest release (restarts the hub)
 ///   POST /api/shutdown             stop, saving state first (how `parley update` stops the hub)
+///   GET  /api/devices              paired devices and pending pairing codes
+///   POST /api/devices              {name} — a pairing code for a new device, and the URLs to join
+///   DELETE /api/devices/{name}     unpair a device
+///   POST /api/pair                 {code, cookie?} — trade a pairing code for a device token (in
+///                                  the body, or with cookie: true as the web UI's cookie)
+///   POST /api/unpair               a paired device removes itself (`parley leave`)
 ///   GET  /                         the web UI
 ///   GET  /api/events               SSE. With ?session=X: the messages X should receive (its topics,
 ///                                  not its own), optionally replaying ids after ?since=N; the
 ///                                  stream also counts as X being connected. Without: every message
 ///                                  plus coalesced "changed" signals for dashboards.
 ///
-/// Only loopback Host headers are served (a DNS-rebinding page can't reach the hub), and every
-/// state-changing endpoint takes a JSON body, which a cross-site page can't send without a CORS
-/// preflight the hub never approves — no web page can post into agents' conversations.
+/// Loopback connections are trusted, as any local process is, but only with a loopback Host
+/// header, so a DNS-rebinding page can't reach the hub. Any other connection must come from an
+/// allowed network and carry a device token (bearer, or the web UI's cookie); only the page itself
+/// and /api/pair are served without one, and shutdown, update and device management stay local.
+/// Every state-changing endpoint takes a JSON body, which a cross-site page can't send without a
+/// CORS preflight the hub never approves, and the cookie is SameSite=Strict — no web page can post
+/// into agents' conversations.
 /// </summary>
 public static class HubServer
 {
     internal static readonly TimeSpan Heartbeat = TimeSpan.FromSeconds(25);
 
-    public static WebApplication Build(CollabHub hub, int port, string bindAddress = "127.0.0.1", UpdateChecker? updates = null)
+    /// <summary>The web UI's credential: the device token, HttpOnly (EventSource can't send headers).</summary>
+    internal const string TokenCookie = "parley_token";
+
+    /// <summary>The device sessions on the hub machine itself count as.</summary>
+    internal static readonly string LocalDevice = Environment.MachineName.ToLowerInvariant();
+
+    private const string DeviceItem = "parley.device";
+
+    // Only from the hub machine: stopping or updating the hub, and deciding who may use it.
+    private static readonly string[] LocalOnlyPaths = ["/api/shutdown", "/api/update", "/api/devices"];
+
+    /// <param name="devices">Who may connect from other machines; null shares with nobody.</param>
+    public static WebApplication Build(CollabHub hub, int port, UpdateChecker? updates = null, DeviceRegistry? devices = null)
     {
+        devices ??= new DeviceRegistry();
+        var endpoints = new HubEndpoints(port, devices);
         var builder = WebApplication.CreateSlimBuilder();
         builder.Logging.ClearProviders();
         builder.Logging.AddSimpleConsole(o => o.SingleLine = true);
         builder.Logging.SetMinimumLevel(LogLevel.Warning);
-        builder.WebHost.UseUrls($"http://{bindAddress}:{port}");
+        builder.WebHost.ConfigureKestrel(o => o.Configure(endpoints.Configuration, reloadOnChange: true));
         builder.Services.ConfigureHttpJsonOptions(o =>
         {
             o.SerializerOptions.PropertyNamingPolicy = JsonNamingPolicy.CamelCase;
@@ -53,19 +80,58 @@ public static class HubServer
 
         app.Use(async (ctx, next) =>
         {
-            if (!IsLoopbackHost(ctx.Request.Host.Host))
+            var remote = ctx.Connection.RemoteIpAddress;
+            if (remote == null || IPAddress.IsLoopback(remote))
             {
-                ctx.Response.StatusCode = StatusCodes.Status421MisdirectedRequest;
+                if (!IsLoopbackHost(ctx.Request.Host.Host))
+                {
+                    ctx.Response.StatusCode = StatusCodes.Status421MisdirectedRequest;
+                    return;
+                }
+                await next();
                 return;
             }
+
+            if (!devices.IsAllowed(remote))
+            {
+                await Refuse(ctx, StatusCodes.Status403Forbidden, $"{remote} is outside the networks this hub is shared with");
+                return;
+            }
+            var path = ctx.Request.Path.Value ?? "";
+            if (LocalOnlyPaths.Any(p => path.StartsWith(p, StringComparison.OrdinalIgnoreCase)))
+            {
+                await Refuse(ctx, StatusCodes.Status403Forbidden, "Only available on the hub machine itself");
+                return;
+            }
+            if (path == "/" || path.Equals("/api/pair", StringComparison.OrdinalIgnoreCase))
+            {
+                await next();
+                return;
+            }
+
+            var device = devices.Authenticate(BearerToken(ctx) ?? ctx.Request.Cookies[TokenCookie]);
+            if (device == null)
+            {
+                await Refuse(ctx, StatusCodes.Status401Unauthorized,
+                    "This device isn't paired with the hub, or was removed. Pair it again: `parley devices add <name>` on the hub machine.");
+                return;
+            }
+            device.Touch(ctx.Request.Headers[ParleyConfig.VersionHeader].FirstOrDefault());
+            ctx.Items[DeviceItem] = device;
+            // Unpairing also ends what's in flight: event streams and read_messages long-polls.
+            using var _ = device.Revoked.Register(ctx.Abort);
             await next();
         });
 
         app.MapGet("/", () => Results.Content(WebUi.Html, "text/html; charset=utf-8"));
-        app.MapGet("/api/health", () => Results.Ok(new
+        app.MapGet("/api/health", (HttpContext ctx) => Results.Ok(new
         {
             name = "parley",
             version = Protocol.Version,
+            apiVersion = Protocol.ApiVersion,
+            device = DeviceOf(ctx),
+            // The web UI offers hub-only actions (update, adding devices) only where they work.
+            local = ctx.Items[DeviceItem] == null,
             latest = updates?.Latest?.ToString(3),
             updateAvailable = updates?.UpdateAvailable ?? false,
             pid = Environment.ProcessId, // lets `parley update` stop a hub the service doesn't own
@@ -95,6 +161,58 @@ public static class HubServer
             return Results.Accepted();
         });
 
+        app.MapGet("/api/devices", () => Results.Ok(devices.List()));
+        app.MapPost("/api/devices", (AddDeviceRequest req) =>
+        {
+            string code;
+            try
+            {
+                code = devices.CreatePairingCode(req.Name ?? "");
+            }
+            catch (ArgumentException ex)
+            {
+                return Results.BadRequest(new { error = ex.Message });
+            }
+            var urls = endpoints.NetworkAddresses.Select(a => $"http://{HubEndpoints.Format(a)}:{port}").ToList();
+            // The page pairs on its own when opened through this link, so scanning the QR is all a phone needs.
+            var link = urls.Count > 0 ? $"{urls[0]}/#/pair/{code}" : null;
+            return Results.Ok(new
+            {
+                code,
+                expiresAt = DateTime.UtcNow + DeviceRegistry.CodeLifetime,
+                urls,
+                link,
+                qr = link != null ? QrDataUrl(link) : null,
+                allowFrom = devices.AllowFrom.Select(n => n.ToString()),
+            });
+        });
+        app.MapDelete("/api/devices/{name}", (string name) =>
+            devices.Remove(name) ? Results.NoContent() : Results.NotFound());
+
+        app.MapPost("/api/pair", (HttpContext ctx, PairRequest req) =>
+        {
+            if (devices.Redeem(req.Code ?? "") is not { } paired)
+                return Results.Json(new { error = "Unknown or expired pairing code" }, statusCode: StatusCodes.Status403Forbidden);
+            var (device, token) = paired;
+            if (req.Cookie != true) return Results.Ok(new { device = device.Name, hub = LocalDevice, token });
+            ctx.Response.Cookies.Append(TokenCookie, token, new CookieOptions
+            {
+                HttpOnly = true,
+                SameSite = SameSiteMode.Strict,
+                Secure = ctx.Request.IsHttps,
+                MaxAge = TimeSpan.FromDays(3650),
+            });
+            return Results.Ok(new { device = device.Name, hub = LocalDevice });
+        });
+        app.MapPost("/api/unpair", (HttpContext ctx, UnpairRequest _) =>
+        {
+            if (ctx.Items[DeviceItem] is not Device device)
+                return Results.BadRequest(new { error = "Only a paired device can unpair itself" });
+            ctx.Response.Cookies.Delete(TokenCookie);
+            devices.Remove(device.Name);
+            return Results.NoContent();
+        });
+
         app.MapPost("/mcp", async (HttpContext ctx) =>
         {
             if (ctx.Request.ContentType?.StartsWith("application/json", StringComparison.OrdinalIgnoreCase) != true)
@@ -108,6 +226,7 @@ public static class HubServer
                 ctx.Request.Headers["X-Session"].FirstOrDefault(),
                 ctx.Request.Headers["Mcp-Session-Id"].FirstOrDefault(),
                 ctx.Request.Headers["X-Working-Dir"].FirstOrDefault(),
+                DeviceOf(ctx),
                 ctx.RequestAborted);
 
             ctx.Response.StatusCode = result.StatusCode;
@@ -122,14 +241,44 @@ public static class HubServer
         app.MapGet("/mcp", () => Results.StatusCode(StatusCodes.Status405MethodNotAllowed));
 
         app.MapGet("/api/events", (HttpContext ctx, string? session, int? since) =>
-            StreamEventsAsync(ctx, hub, string.IsNullOrWhiteSpace(session) ? null : session.Trim(), since,
+            StreamEventsAsync(ctx, hub, devices, string.IsNullOrWhiteSpace(session) ? null : session.Trim(), since,
                 app.Lifetime.ApplicationStopping));
 
         app.Lifetime.ApplicationStopping.Register(hub.Dispose);
+        app.Lifetime.ApplicationStopped.Register(endpoints.Dispose);
         return app;
     }
 
+    /// <summary>The device a request came from: its paired name, or the hub machine's own.</summary>
+    private static string DeviceOf(HttpContext ctx) => (ctx.Items[DeviceItem] as Device)?.Name ?? LocalDevice;
+
+    /// <summary>A QR code for <paramref name="text"/> as an SVG data URL (dark on white, which every scanner reads).</summary>
+    private static string QrDataUrl(string text)
+    {
+        using var data = QRCoder.QRCodeGenerator.GenerateQrCode(text, QRCoder.QRCodeGenerator.ECCLevel.M);
+        var svg = new QRCoder.SvgQRCode(data).GetGraphic(8);
+        return "data:image/svg+xml;base64," + Convert.ToBase64String(Encoding.UTF8.GetBytes(svg));
+    }
+
+    private static string? BearerToken(HttpContext ctx)
+    {
+        var auth = ctx.Request.Headers.Authorization.FirstOrDefault();
+        return auth != null && auth.StartsWith("Bearer ", StringComparison.OrdinalIgnoreCase) ? auth[7..].Trim() : null;
+    }
+
+    private static Task Refuse(HttpContext ctx, int status, string error)
+    {
+        ctx.Response.StatusCode = status;
+        return ctx.Response.WriteAsJsonAsync(new { error });
+    }
+
     public sealed record SendRequest(string? Session, string? Topic, string? Content);
+
+    public sealed record AddDeviceRequest(string? Name);
+
+    public sealed record PairRequest(string? Code, bool? Cookie);
+
+    public sealed record UnpairRequest;
 
     public sealed record UpdateRequest;
 
@@ -138,7 +287,7 @@ public static class HubServer
     private static bool IsLoopbackHost(string host) =>
         host is "localhost" or "127.0.0.1" or "[::1]" or "::1";
 
-    private static async Task StreamEventsAsync(HttpContext ctx, CollabHub hub, string? session, int? since,
+    private static async Task StreamEventsAsync(HttpContext ctx, CollabHub hub, DeviceRegistry devices, string? session, int? since,
         CancellationToken stopping)
     {
         // Streams never end on their own; without the stopping token shutdown waits them out.
@@ -164,8 +313,12 @@ public static class HubServer
         // arrives before the stream drops.
         var lastSent = since ?? hub.LastMessageId;
         hub.MessageSent += OnMessage;
-        if (session == null) hub.StateChanged += OnChanged;
-        using var listener = session != null ? hub.OpenListener(session) : null;
+        if (session == null)
+        {
+            hub.StateChanged += OnChanged;
+            devices.SharingChanged += OnChanged; // a device paired, was removed, or its code lapsed
+        }
+        using var listener = session != null ? hub.OpenListener(session, DeviceOf(ctx)) : null;
         try
         {
             await ctx.Response.WriteAsync($"event: ready\ndata: {{\"lastId\":{lastSent}}}\n\n", ct);
@@ -215,6 +368,7 @@ public static class HubServer
         {
             hub.MessageSent -= OnMessage;
             hub.StateChanged -= OnChanged;
+            devices.SharingChanged -= OnChanged;
         }
     }
 

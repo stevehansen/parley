@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.Text.Json;
+using Parley.Sharing;
 using Parley.Shim;
 
 namespace Parley.Update;
@@ -100,14 +101,14 @@ internal static class UpdateCommand
         // A shim may have restarted a hub meanwhile (its reconnect loop does that): replace it too.
         await StopHubAsync(service: false);
         if (service) ServiceManager.Start();
-        else SelfProcess.StartDetached(toolShim, "serve --background");
+        else if (JoinedHub.Load() == null) SelfProcess.StartDetached(toolShim, "serve --background");
 
         if (code == 0) UpdateHistory.Append(current, target, rollback: downgrade);
         AppendLog(code == 0
             ? $"{(downgrade ? "rolled back" : "updated")} {current.ToString(3)} to {version}"
             : $"{(downgrade ? "rollback" : "update")} {current.ToString(3)} to {version} FAILED:\n{output.Trim()}");
         Console.WriteLine(code == 0
-            ? $"{(downgrade ? "Rolled back" : "Updated")} to {version}; the hub runs it now. Open AI sessions switch when they restart."
+            ? $"{(downgrade ? "Rolled back" : "Updated")} to {version}{(JoinedHub.Load() == null ? "; the hub runs it now" : "")}. Open AI sessions switch when they restart."
             : $"{(downgrade ? "Rollback" : "Update")} failed; still on {current.ToString(3)}.\n{output.Trim()}");
         return code;
     }

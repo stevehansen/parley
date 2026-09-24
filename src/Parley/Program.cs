@@ -1,6 +1,7 @@
 using Parley;
 using Parley.Cli;
 using Parley.Hub;
+using Parley.Sharing;
 using Parley.Shim;
 using Parley.Update;
 
@@ -11,6 +12,11 @@ const string usage = """
       parley install              Run the hub as a background service and register Parley with Claude Code / Codex
       parley uninstall            Remove the service and those registrations (keeps your conversations)
       parley status               Show the hub, connected sessions and topics
+      parley devices              List the devices this hub is shared with
+      parley devices add <name>   Pair another device (prints a join command with a one-time code)
+      parley devices remove <name> Unpair a device
+      parley join <url> <code>    Use another machine's hub from this device
+      parley leave                Stop using the joined hub (back to a hub on this machine)
       parley update [--check]     Install the newest release (or just check for one)
       parley update --rollback    Go back to the version that ran before
       parley update --to <ver>    Install a specific release
@@ -23,7 +29,7 @@ const string usage = """
     Push delivery (a message wakes an idle Claude Code session) needs channels enabled:
       claude --dangerously-load-development-channels server:parley
 
-    Environment: PARLEY_SESSION (session name; default: folder name), PARLEY_PORT, PARLEY_URL, PARLEY_STATE.
+    Environment: PARLEY_SESSION (session name; default: folder name), PARLEY_PORT, PARLEY_URL, PARLEY_TOKEN, PARLEY_STATE.
     """;
 
 using var cts = new CancellationTokenSource();
@@ -39,6 +45,15 @@ switch (args.FirstOrDefault())
 
     case "status":
         return await Commands.StatusAsync();
+
+    case "devices":
+        return await SharingCommands.DevicesAsync(args[1..]);
+
+    case "join":
+        return await SharingCommands.JoinAsync(args[1..]);
+
+    case "leave":
+        return await SharingCommands.LeaveAsync();
 
     case "update":
         return await UpdateCommand.RunAsync(args[1..]);
@@ -72,7 +87,8 @@ switch (args.FirstOrDefault())
         var legacy = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "TerminalHost", "collab-state.json");
         var hub = new CollabHub(ParleyConfig.StateFile, legacy);
         var updates = new UpdateChecker();
-        var app = HubServer.Build(hub, ParleyConfig.Port, updates: updates);
+        var devices = new DeviceRegistry(ParleyConfig.SharingFile);
+        var app = HubServer.Build(hub, ParleyConfig.Port, updates, devices);
         try
         {
             await app.StartAsync(cts.Token);

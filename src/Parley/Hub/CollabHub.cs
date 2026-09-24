@@ -49,13 +49,14 @@ public sealed class CollabHub : IDisposable
 
     #region Sessions
 
-    public void EnsureSession(string name, string? workingDir = null, string? projectName = null)
+    public void EnsureSession(string name, string? workingDir = null, string? projectName = null, string? device = null)
     {
         lock (_lock)
         {
             if (!_sessions.TryGetValue(name, out var s))
                 _sessions[name] = s = new Session { Name = name };
             s.LastSeen = DateTime.UtcNow;
+            if (!string.IsNullOrEmpty(device)) s.Device = device;
             if (!string.IsNullOrEmpty(workingDir))
             {
                 s.WorkingDir = workingDir;
@@ -100,12 +101,12 @@ public sealed class CollabHub : IDisposable
             return _sessions.Values.Select(s => new Session
             {
                 Name = s.Name, WorkingDir = s.WorkingDir, ProjectName = s.ProjectName,
-                LastSeen = s.LastSeen, Listeners = s.Listeners,
+                LastSeen = s.LastSeen, Listeners = s.Listeners, Device = s.Device,
             }).ToList();
     }
 
     /// <summary>Tracks an open push stream; dispose the result when the stream closes.</summary>
-    public IDisposable OpenListener(string session)
+    public IDisposable OpenListener(string session, string? device = null)
     {
         lock (_lock)
         {
@@ -113,6 +114,7 @@ public sealed class CollabHub : IDisposable
                 _sessions[session] = s = new Session { Name = session };
             s.Listeners++;
             s.LastSeen = DateTime.UtcNow;
+            if (!string.IsNullOrEmpty(device)) s.Device = device;
         }
         RaiseChanged();
         return new Listener(this, session);

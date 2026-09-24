@@ -119,4 +119,11 @@ internal static class Protocol
     }
 
     public static string Version => typeof(Protocol).Assembly.GetName().Version?.ToString(3) ?? "0.0.0";
+
+    /// <summary>
+    /// The hub's HTTP API revision, in /api/health. Devices update independently, so bump it only
+    /// for a change an older shim or CLI can't work with; <c>parley join</c> and <c>status</c>
+    /// compare it.
+    /// </summary>
+    public const int ApiVersion = 1;
 }
