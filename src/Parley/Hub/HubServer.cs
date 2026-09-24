@@ -7,6 +7,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Parley.Mcp;
+using Parley.Update;
 
 namespace Parley.Hub;
 
@@ -17,16 +18,23 @@ namespace Parley.Hub;
 ///   GET  /api/health               liveness probe used by the shim before auto-starting a hub
 ///   GET  /api/topics | /api/sessions | /api/messages?topic=&amp;count=
 ///   POST /api/messages             {session, topic, content} — send without MCP (UIs, scripts)
+///   DELETE /api/topics/{name}      delete a topic and its messages
+///   POST /api/update               install the newest release (restarts the hub)
+///   GET  /                         the web UI
 ///   GET  /api/events               SSE. With ?session=X: the messages X should receive (its topics,
 ///                                  not its own), optionally replaying ids after ?since=N; the
 ///                                  stream also counts as X being connected. Without: every message
 ///                                  plus coalesced "changed" signals for dashboards.
+///
+/// Only loopback Host headers are served (a DNS-rebinding page can't reach the hub), and every
+/// state-changing endpoint takes a JSON body, which a cross-site page can't send without a CORS
+/// preflight the hub never approves — no web page can post into agents' conversations.
 /// </summary>
 public static class HubServer
 {
     private static readonly TimeSpan Heartbeat = TimeSpan.FromSeconds(25);
 
-    public static WebApplication Build(CollabHub hub, int port, string bindAddress = "127.0.0.1")
+    public static WebApplication Build(CollabHub hub, int port, string bindAddress = "127.0.0.1", UpdateChecker? updates = null)
     {
         var builder = WebApplication.CreateSlimBuilder();
         builder.Logging.ClearProviders();
@@ -42,7 +50,24 @@ public static class HubServer
         var app = builder.Build();
         var mcp = new HttpMcpEndpoint(hub);
 
-        app.MapGet("/api/health", () => Results.Ok(new { name = "parley", version = Protocol.Version }));
+        app.Use(async (ctx, next) =>
+        {
+            if (!IsLoopbackHost(ctx.Request.Host.Host))
+            {
+                ctx.Response.StatusCode = StatusCodes.Status421MisdirectedRequest;
+                return;
+            }
+            await next();
+        });
+
+        app.MapGet("/", () => Results.Content(WebUi.Html, "text/html; charset=utf-8"));
+        app.MapGet("/api/health", () => Results.Ok(new
+        {
+            name = "parley",
+            version = Protocol.Version,
+            latest = updates?.Latest?.ToString(3),
+            updateAvailable = updates?.UpdateAvailable ?? false,
+        }));
         app.MapGet("/api/topics", () => Results.Ok(hub.GetTopics()));
         app.MapGet("/api/sessions", () => Results.Ok(hub.GetSessions()));
         app.MapGet("/api/messages", (string? topic, int? count) =>
@@ -51,12 +76,25 @@ public static class HubServer
         {
             if (string.IsNullOrWhiteSpace(req.Session) || string.IsNullOrWhiteSpace(req.Topic) || string.IsNullOrEmpty(req.Content))
                 return Results.BadRequest(new { error = "session, topic and content are required" });
-            hub.EnsureSession(req.Session);
-            return Results.Ok(hub.SendMessage(req.Session, req.Topic, req.Content));
+            return Results.Ok(hub.SendMessage(req.Session.Trim(), req.Topic.Trim(), req.Content, subscribeSender: false));
+        });
+        app.MapDelete("/api/topics/{name}", (string name) =>
+            hub.DeleteTopic(name) ? Results.NoContent() : Results.NotFound());
+        app.MapPost("/api/update", (UpdateRequest _) =>
+        {
+            if (updates is not { UpdateAvailable: true })
+                return Results.Conflict(new { error = "No update available" });
+            UpdateCommand.StartDetached();
+            return Results.Accepted();
         });
 
         app.MapPost("/mcp", async (HttpContext ctx) =>
         {
+            if (ctx.Request.ContentType?.StartsWith("application/json", StringComparison.OrdinalIgnoreCase) != true)
+            {
+                ctx.Response.StatusCode = StatusCodes.Status415UnsupportedMediaType;
+                return;
+            }
             using var reader = new StreamReader(ctx.Request.Body, Encoding.UTF8);
             var body = await reader.ReadToEndAsync(ctx.RequestAborted);
             var result = await mcp.HandleAsync(body,
@@ -85,6 +123,11 @@ public static class HubServer
     }
 
     public sealed record SendRequest(string? Session, string? Topic, string? Content);
+
+    public sealed record UpdateRequest;
+
+    private static bool IsLoopbackHost(string host) =>
+        host is "localhost" or "127.0.0.1" or "[::1]" or "::1";
 
     private static async Task StreamEventsAsync(HttpContext ctx, CollabHub hub, string? session, int? since,
         CancellationToken stopping)

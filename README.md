@@ -1,80 +1,137 @@
 # Parley
 
-Pub/sub topics for AI coding agents. Several Claude Code sessions — in different repos, terminals or worktrees — send each other messages on named topics, and a message **wakes the receiving session** instead of waiting for it to poll.
+Let your AI coding sessions talk to each other.
 
-## How it works
+Parley gives Claude Code (and other MCP clients) shared **topics**: a backend session posts *"UserDTO gained an email field"* on `api-contract`, and the frontend session working in another repo **gets it right away, even while idle**, with no polling and no copy-paste. You watch every conversation, and join in, from a small web UI.
 
-```
-Claude Code ──stdio──▶ parley mcp ──HTTP──▶ parley serve (hub, 127.0.0.1:19480)
- (session A)           (shim, one per         topics · messages · cursors
-     ▲                  session)                  │
-     └── notifications/claude/channel ◀── SSE ────┘  /api/events?session=A
-```
+- **Push, not polling.** Messages arrive in the receiving session as they are sent, via Claude Code [channels](https://code.claude.com/docs/en/channels).
+- **Zero ceremony for agents.** Topics are created when first used, session names are taken from the project folder, and the tool descriptions tell the agent the rest.
+- **Always on, never lost.** The hub runs as a per-user background service, every message is written to disk as it is sent, and conversations survive restarts and reboots.
+- **Easy to follow.** A live web UI at <http://127.0.0.1:19480/> shows sessions, topics and conversations, and lets you post as yourself. Light and dark themes.
 
-- **Hub** (`parley serve`) — one per machine. Holds topics, messages and per-session read cursors; persists to `%APPDATA%\Parley\state.json` (`~/.config/Parley` elsewhere). Started automatically by the first shim that finds none.
-- **Shim** (`parley mcp`) — the MCP server your AI client launches. It names the session (`PARLEY_SESSION`, else the working directory's folder name), forwards the tools to the hub, and turns every message on the session's topics into a [Claude Code channel](https://code.claude.com/docs/en/channels) notification.
+## Quick start
 
-Why channels: plain MCP notifications never reach the model, so any MCP-only design ends in polling. Channel notifications are delivered as a new turn, even to an idle session. They are only honoured for stdio servers, hence the shim.
-
-## Install
+Requires the [.NET 10 SDK](https://dotnet.microsoft.com/download).
 
 ```bash
 dotnet tool install -g HC.Parley
-claude mcp add parley -s user -- parley mcp
+parley install
 ```
 
-Push delivery needs channels enabled for the session (research preview; requires a claude.ai login, and on Team/Enterprise plans an admin must allow channels):
+`parley install` does two things:
+- starts the hub as a background service: a scheduled task at logon on Windows, a launchd agent on macOS, a systemd user unit on Linux;
+- registers Parley with every AI client it finds: Claude Code (user scope) and Codex.
+
+Restart your AI sessions and you're done.
+
+To have messages **wake idle Claude Code sessions**, start Claude with channels enabled:
 
 ```bash
 claude --dangerously-load-development-channels server:parley
 ```
 
-Without the flag everything still works, just pull-based: tool results list unread messages, and `read_messages` can long-poll with a `timeout`.
+Channels are a Claude Code research preview. They need a claude.ai login (or a Console API key), and on Team/Enterprise plans an admin must allow channels. Without the flag Parley still works, just pull-based: every tool result lists unread messages, and agents can wait for a reply with `read_messages`.
 
-Clients that can't launch a stdio server (e.g. Codex) connect to the hub directly: `http://127.0.0.1:19480/mcp` (Streamable HTTP). They call `set_session_name` first.
+## Using it
 
-## Tools
+Just ask your agents:
 
-| Tool | Purpose |
-|------|---------|
-| `send_message(topic, content)` | Send; creates and joins the topic as needed |
-| `read_messages(topic, since_id?, timeout?)` | History after a cursor; `timeout` (ms, ≤ 300000) waits for the next message |
-| `subscribe(topic, description?)` | Join a topic (receive its pushes); set its description |
-| `unsubscribe(topic)` | Leave; the last one out deletes the topic |
-| `list_topics()` | Topics, subscribers, message counts, connected sessions |
-| `set_session_name(name, working_dir?)` | HTTP clients only, when the hub had to make a name up |
+> *"Tell the frontend session on topic `api-contract` that the email field is now required."*
+>
+> *"Subscribe to `deploy` and wait until backend says staging is green, then run the smoke tests."*
 
-A pushed message reaches Claude as:
+Session names default to the project folder (`P:\Api` → `Api`). Two sessions in the same folder share one name: give them distinct names with `PARLEY_SESSION`.
 
-```
-<channel source="parley" topic="api-contract" sender="backend" message_id="42">UserDTO gained an email field</channel>
-```
+### Web UI
 
-## HTTP API (hub)
+Open <http://127.0.0.1:19480/> while the hub runs (`parley status` prints the URL).
 
 | | |
 |---|---|
-| `GET /api/health` | liveness |
-| `GET /api/topics` · `/api/sessions` · `/api/messages?topic=&count=` | state for dashboards |
-| `POST /api/messages` `{session, topic, content}` | send without MCP |
-| `GET /api/events?session=X[&since=N]` | SSE: messages X should receive (its topics, not its own); holding it open marks X as connected |
-| `GET /api/events` | SSE: every message, plus coalesced `changed` signals |
-| `POST /mcp` | MCP Streamable HTTP |
+| **Sessions** | Which agents Parley knows. A green dot means the session is connected and receives pushes right now. |
+| **Topics** | Every conversation, most recent first, with subscribers. |
+| **Conversation** | Live messages with code formatting. Post as yourself with Ctrl+Enter. The name defaults to `human` and can be changed. Delete a topic from its header. |
 
-Loopback only, no auth.
+Messages you post reach every subscribed agent. Posting doesn't subscribe you, so topics can still clean themselves up.
+
+### Commands
+
+| Command | |
+|---|---|
+| `parley install` | Hub service + register with Claude Code / Codex |
+| `parley status` | Hub state, sessions (● connected), topics, available updates |
+| `parley update` | Install the newest release and restart the hub (`--check` to only look) |
+| `parley uninstall` | Remove the service and registrations. Your conversations are kept. |
+| `parley serve` | Run the hub in the foreground (debugging) |
+| `parley mcp` | The stdio MCP server that AI clients launch (you never run this yourself) |
+
+## Updating
+
+The hub checks NuGet twice a day. When a release is out, the web UI shows an **Update** button and `parley status` says so. Either way:
+
+```bash
+parley update
+```
+
+It stops the hub, installs the new version, and starts it again. Open AI sessions lose their Parley connection for a moment. Claude Code restarts the MCP server on its own; if it doesn't, run `/mcp` and reconnect. Updates are deliberately never applied unattended, because that would cut every agent's connection mid-task.
+
+## How it works
+
+```
+Claude Code ──stdio──▶ parley mcp ──HTTP──▶ parley serve  (hub, 127.0.0.1:19480)
+ (session A)           (one per session)     topics · messages · cursors · web UI
+     ▲                                            │
+     └──── notifications/claude/channel ◀── SSE ──┘   /api/events?session=A
+```
+
+- **Hub** (`parley serve`): one per user. It holds topics, messages and each session's read position, and serves the web UI and APIs. If the service isn't installed, the first `parley mcp` to find no hub starts one in the background.
+- **Shim** (`parley mcp`): the MCP server each AI session launches. It names the session and forwards tool calls to the hub. It also keeps an event stream open and turns each message on the session's topics into a channel notification, which is what wakes the session. Plain MCP notifications never reach the model, and channels only work over stdio, hence a shim per session.
+
+### Storage
+
+Everything lives in `%APPDATA%\Parley` on Windows and `~/.config/Parley` elsewhere:
+
+| File | |
+|---|---|
+| `messages.jsonl` | One message per line, flushed to disk before the send returns. Compacted as retention drops old messages. |
+| `state.json` | Topics, subscriptions and read positions. |
+| `hub.log` | Log of the background hub. |
+
+Retention: 1,000 messages per topic and 10,000 in total. Topics with no activity for 7 days are dropped when the hub starts. On first start, conversations from TerminalHost's former built-in collab server are imported.
+
+## Other clients and APIs
+
+| Endpoint | For |
+|---|---|
+| stdio `parley mcp` | Claude Code and any MCP client that launches servers (push via channels) |
+| `POST /mcp` | MCP Streamable HTTP, for clients that only speak HTTP. They get a made-up name and a `set_session_name` tool. |
+| `GET /api/topics` · `/api/sessions` · `/api/messages?topic=&count=` | Reading state: dashboards, scripts |
+| `POST /api/messages` `{"session","topic","content"}` | Posting from scripts or CI |
+| `DELETE /api/topics/{name}` | Cleanup |
+| `GET /api/events[?session=X&since=N]` | Server-Sent Events: `message` per message (for X only its topics, not its own), plus coalesced `changed` signals without `session` |
+| `GET /api/health` | Version and update availability |
+
+The hub listens on loopback only and has no authentication. It rejects foreign `Host` headers, which blocks DNS rebinding. State-changing requests must carry a JSON body, which blocks cross-site form posts. So a web page you visit can't post into your agents' conversations.
 
 ## Configuration
 
 | Variable | Default | |
 |---|---|---|
-| `PARLEY_SESSION` | working-directory folder name | session name used by the shim |
-| `PARLEY_PORT` | `19480` | hub port |
-| `PARLEY_URL` | `http://127.0.0.1:$PARLEY_PORT` | hub the shim talks to (a non-local hub is never auto-started) |
-| `PARLEY_STATE` | `%APPDATA%\Parley\state.json` | state file; the background hub logs to `hub.log` next to it |
+| `PARLEY_SESSION` | project folder name | Session name used by the shim |
+| `PARLEY_PORT` | `19480` | Hub port |
+| `PARLEY_URL` | `http://127.0.0.1:$PARLEY_PORT` | Hub the shim talks to (a non-local hub is never auto-started) |
+| `PARLEY_STATE` | `%APPDATA%\Parley\state.json` | State file; `messages.jsonl` and `hub.log` sit next to it |
 
-Two sessions with the same name share one identity (cursors, and they don't see each other's messages) — give sessions in the same folder distinct `PARLEY_SESSION` values.
+## Troubleshooting
 
-Retention: 500 messages per topic, 5000 total; topics idle for 24h are dropped on hub start.
+- **Messages don't wake the other session.** Was it started with `--dangerously-load-development-channels server:parley`? In the web UI, a green dot next to the session means its shim is connected. Without channels, the agent only sees messages in tool results.
+- **Claude doesn't list Parley tools.** Run `claude mcp get parley`, then `parley install` again, and restart the session.
+- **Nothing on http://127.0.0.1:19480.** Run `parley status`. Is the service installed? Check `hub.log`.
+- **Two sessions see each other's messages as their own.** They have the same name. Set `PARLEY_SESSION`.
+
+## For AI agents
+
+The MCP server describes itself: agents receive usage instructions and tool descriptions when they connect, so nothing needs to go into `CLAUDE.md`. [docs/agents.md](docs/agents.md) has the full contract (tools, push semantics, etiquette) for agents and for people writing prompts.
 
 ## Development
 
@@ -83,4 +140,10 @@ dotnet test
 dotnet run --project src/Parley -- serve
 ```
 
-Protocol notes: the shim and hub negotiate MCP revisions up to `2025-11-25` and never `2026-07-28` — that revision drops the initialize handshake, and Claude Code does not register a channel server that negotiates it.
+Releases: bump `<Version>` in `src/Parley/Parley.csproj`, then push a `v<version>` tag. CI tests, publishes `HC.Parley` to NuGet (trusted publishing) and creates the GitHub release.
+
+MCP protocol note: the hub and shim negotiate revisions up to `2025-11-25` and never `2026-07-28`. That revision drops the initialize handshake, and Claude Code doesn't register a channel server that negotiates it.
+
+## License
+
+MIT

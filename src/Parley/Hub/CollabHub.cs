@@ -1,20 +1,20 @@
-using System.Text.Json;
-
 namespace Parley.Hub;
 
 /// <summary>
 /// The conversation state: sessions, topics, messages and per-session read cursors. Thread-safe
 /// via one lock. Topics auto-create on first use and auto-delete when their last subscriber leaves
 /// (only after someone subscribed since load, see <see cref="Topic.HasHadSubscriber"/>).
-/// With a state file, changes are flushed every few seconds and on dispose. Sessions are not
-/// persisted (they re-register on their next call); subscriptions are, through the read cursors.
+/// With a state file, messages are durable as soon as they are sent (see <see cref="HubStore"/>);
+/// topics and cursors are flushed every few seconds and on dispose. Sessions are not persisted
+/// (they re-register on their next call); subscriptions are, through the read cursors.
 /// </summary>
 public sealed class CollabHub : IDisposable
 {
-    private const int MaxMessagesPerTopic = 500;
-    private const int MaxMessagesTotal = 5000;
-    private static readonly TimeSpan TopicMaxAge = TimeSpan.FromHours(24);
-    private static readonly JsonSerializerOptions FileJson = new() { WriteIndented = true, PropertyNameCaseInsensitive = true };
+    private const int MaxMessagesPerTopic = 1000;
+    private const int MaxMessagesTotal = 10000;
+    // Compact the log once it carries this many lines that retention or deletes have dropped.
+    private const int CompactionSlack = 1000;
+    private static readonly TimeSpan TopicMaxIdle = TimeSpan.FromDays(7);
 
     private readonly object _lock = new();
     private readonly Dictionary<string, Session> _sessions = new(StringComparer.OrdinalIgnoreCase);
@@ -25,7 +25,7 @@ public sealed class CollabHub : IDisposable
     private readonly Dictionary<string, List<TaskCompletionSource>> _topicWaiters = new(StringComparer.OrdinalIgnoreCase);
     private int _nextMessageId;
 
-    private readonly string? _stateFile;
+    private readonly HubStore? _store;
     private readonly Timer? _saveTimer;
     private bool _dirty;
     private bool _disposed;
@@ -36,13 +36,13 @@ public sealed class CollabHub : IDisposable
     /// <summary>Raised (outside the lock) for every sent message; drives push delivery.</summary>
     public event Action<Message>? MessageSent;
 
-    /// <param name="stateFile">JSON file to persist to, or null for in-memory only.</param>
-    public CollabHub(string? stateFile = null)
+    /// <param name="stateFile">State file to persist to (the message log sits next to it), or null for in-memory only.</param>
+    /// <param name="legacyStateFile">TerminalHost collab-state.json to import on first start.</param>
+    public CollabHub(string? stateFile = null, string? legacyStateFile = null)
     {
-        _stateFile = stateFile;
-        if (_stateFile == null) return;
+        if (stateFile == null) return;
 
-        Directory.CreateDirectory(Path.GetDirectoryName(Path.GetFullPath(_stateFile))!);
+        _store = new HubStore(stateFile, legacyStateFile);
         LoadState();
         _saveTimer = new Timer(_ => SaveIfDirty(), null, TimeSpan.FromSeconds(5), TimeSpan.FromSeconds(5));
     }
@@ -174,6 +174,22 @@ public sealed class CollabHub : IDisposable
         return (true, null);
     }
 
+    /// <summary>Deletes a topic with its messages, whoever is subscribed. For humans cleaning up.</summary>
+    public bool DeleteTopic(string topic)
+    {
+        lock (_lock)
+        {
+            if (!_topics.Remove(topic)) return false;
+            _messages.RemoveAll(m => m.Topic.Equals(topic, StringComparison.OrdinalIgnoreCase));
+            if (_topicWaiters.Remove(topic, out var waiters))
+                foreach (var w in waiters) w.TrySetResult();
+            foreach (var c in _cursors.Values) c.Remove(topic);
+            _dirty = true;
+        }
+        RaiseChanged();
+        return true;
+    }
+
     public List<Topic> GetTopics()
     {
         lock (_lock)
@@ -192,17 +208,27 @@ public sealed class CollabHub : IDisposable
 
     #region Messages
 
-    public Message SendMessage(string session, string topic, string content)
+    /// <param name="subscribeSender">
+    /// Agents join the topics they post to. A human posting from the web UI doesn't: a subscriber
+    /// that never leaves would keep the topic from ever being cleaned up.
+    /// </param>
+    public Message SendMessage(string session, string topic, string content, bool subscribeSender = true)
     {
         Message msg;
         lock (_lock)
         {
-            EnsureTopicAndSubscribe(session, topic);
+            if (subscribeSender)
+                EnsureTopicAndSubscribe(session, topic);
+            else if (!_topics.ContainsKey(topic))
+                _topics[topic] = new Topic { Name = topic, CreatedBy = session, HasHadSubscriber = true };
+
             msg = new Message { Id = ++_nextMessageId, Topic = topic, Sender = session, Content = content };
             _messages.Add(msg);
+            // Under the lock, so the log stays in id order.
+            _store?.Append(msg);
 
             // The sender has obviously seen its own message.
-            _cursors[session][topic] = msg.Id;
+            if (subscribeSender) _cursors[session][topic] = msg.Id;
 
             if (_topicWaiters.Remove(topic, out var waiters))
                 foreach (var w in waiters) w.TrySetResult();
@@ -347,36 +373,25 @@ public sealed class CollabHub : IDisposable
 
     private void LoadState()
     {
-        PersistedState? state;
-        try
-        {
-            if (!File.Exists(_stateFile)) return;
-            state = JsonSerializer.Deserialize<PersistedState>(File.ReadAllText(_stateFile!), FileJson);
-        }
-        catch (Exception ex) when (ex is IOException or JsonException)
-        {
-            Log.Error($"Could not load {_stateFile}; starting empty", ex);
-            return;
-        }
-        if (state == null) return;
-
+        var (state, messages) = _store!.Load();
         lock (_lock)
         {
             _nextMessageId = state.NextMessageId;
-            var cutoff = DateTime.UtcNow - TopicMaxAge;
+            var cutoff = DateTime.UtcNow - TopicMaxIdle;
+            var lastActivity = messages.GroupBy(m => m.Topic, StringComparer.OrdinalIgnoreCase)
+                .ToDictionary(g => g.Key, g => g.Max(m => m.CreatedAt), StringComparer.OrdinalIgnoreCase);
 
             foreach (var pt in state.Topics)
             {
-                var recent = pt.CreatedAt >= cutoff || state.Messages.Any(m =>
-                    m.Topic.Equals(pt.Name, StringComparison.OrdinalIgnoreCase) && m.CreatedAt >= cutoff);
-                if (!recent) continue;
+                var active = lastActivity.TryGetValue(pt.Name, out var last) && last > pt.CreatedAt ? last : pt.CreatedAt;
+                if (active < cutoff) continue;
                 _topics[pt.Name] = new Topic
                 {
                     Name = pt.Name, Description = pt.Description, CreatedBy = pt.CreatedBy, CreatedAt = pt.CreatedAt,
                 };
             }
 
-            _messages.AddRange(state.Messages.Where(m => _topics.ContainsKey(m.Topic)));
+            _messages.AddRange(messages.Where(m => _topics.ContainsKey(m.Topic)).OrderBy(m => m.Id));
             EnforceRetention();
 
             // Every subscription has a cursor, so cursors restore subscriptions: a session that
@@ -393,7 +408,9 @@ public sealed class CollabHub : IDisposable
                 }
                 if (kept.Count > 0) _cursors[session] = kept;
             }
+            _dirty = true;
         }
+        SaveIfDirty();
     }
 
     // Must be called under _lock.
@@ -407,46 +424,43 @@ public sealed class CollabHub : IDisposable
         }
 
         if (_messages.Count > MaxMessagesTotal)
-        {
-            var keep = _messages.OrderByDescending(m => m.Id).Take(MaxMessagesTotal).Select(m => m.Id).ToHashSet();
-            _messages.RemoveAll(m => !keep.Contains(m.Id));
-        }
+            _messages.RemoveRange(0, _messages.Count - MaxMessagesTotal); // kept in id order
     }
-
-    // Must be called under _lock.
-    private PersistedState Snapshot() => new()
-    {
-        NextMessageId = _nextMessageId,
-        Topics = _topics.Values.Select(t => new PersistedTopic
-        {
-            Name = t.Name, Description = t.Description, CreatedBy = t.CreatedBy, CreatedAt = t.CreatedAt,
-        }).ToList(),
-        Messages = _messages.ToList(),
-        Cursors = _cursors.ToDictionary(kv => kv.Key, kv => new Dictionary<string, int>(kv.Value)),
-    };
 
     internal void SaveIfDirty()
     {
-        if (_stateFile == null) return;
+        if (_store == null) return;
         PersistedState snapshot;
+        bool compact;
         lock (_lock)
         {
             if (!_dirty) return;
             _dirty = false;
             EnforceRetention();
-            snapshot = Snapshot();
+            snapshot = new PersistedState
+            {
+                NextMessageId = _nextMessageId,
+                Topics = _topics.Values.Select(t => new PersistedTopic
+                {
+                    Name = t.Name, Description = t.Description, CreatedBy = t.CreatedBy, CreatedAt = t.CreatedAt,
+                }).ToList(),
+                Cursors = _cursors.ToDictionary(kv => kv.Key, kv => new Dictionary<string, int>(kv.Value)),
+            };
+            compact = _store.LogLines > _messages.Count + CompactionSlack;
         }
 
-        // Disk I/O outside the lock so messaging never waits on it.
         try
         {
-            var tmp = _stateFile + ".tmp";
-            File.WriteAllText(tmp, JsonSerializer.Serialize(snapshot, FileJson));
-            File.Move(tmp, _stateFile, overwrite: true);
+            // State I/O outside the lock so messaging never waits on it.
+            _store.SaveState(snapshot);
+            // The rewrite holds the lock: a message appended mid-rewrite would otherwise be lost.
+            // Rare enough (every CompactionSlack dropped lines) for that to be cheap.
+            if (compact)
+                lock (_lock) _store.Compact(_messages);
         }
         catch (IOException ex)
         {
-            Log.Error($"Could not save {_stateFile}; will retry", ex);
+            Log.Error("Could not save hub state; will retry", ex);
             lock (_lock) _dirty = true;
         }
     }

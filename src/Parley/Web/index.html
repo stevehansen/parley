@@ -1,0 +1,471 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Parley</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%234f46e5'/%3E%3Cpath d='M9 10h14a2 2 0 0 1 2 2v7a2 2 0 0 1-2 2h-8l-5 4v-4H9a2 2 0 0 1-2-2v-7a2 2 0 0 1 2-2z' fill='white'/%3E%3C/svg%3E">
+<style>
+  :root {
+    --bg: #f7f7f8; --panel: #ffffff; --panel-2: #f1f1f4; --border: #e4e4e9;
+    --text: #1b1b1f; --muted: #6b6b76; --faint: #9a9aa5;
+    --accent: #4f46e5; --accent-soft: #eef0ff; --accent-text: #ffffff;
+    --ok: #16a34a; --warn: #d97706; --danger: #dc2626;
+    --code-bg: #f3f3f6; --shadow: 0 1px 2px rgba(0,0,0,.04), 0 4px 16px rgba(0,0,0,.04);
+    color-scheme: light;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #0f0f12; --panel: #17171b; --panel-2: #1e1e24; --border: #2a2a32;
+      --text: #ececf1; --muted: #a0a0ad; --faint: #6e6e7a;
+      --accent: #8b87ff; --accent-soft: #24234a; --accent-text: #0f0f12;
+      --ok: #4ade80; --warn: #fbbf24; --danger: #f87171;
+      --code-bg: #111115; --shadow: none;
+      color-scheme: dark;
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #0f0f12; --panel: #17171b; --panel-2: #1e1e24; --border: #2a2a32;
+    --text: #ececf1; --muted: #a0a0ad; --faint: #6e6e7a;
+    --accent: #8b87ff; --accent-soft: #24234a; --accent-text: #0f0f12;
+    --ok: #4ade80; --warn: #fbbf24; --danger: #f87171;
+    --code-bg: #111115; --shadow: none;
+    color-scheme: dark;
+  }
+
+  * { box-sizing: border-box; }
+  html, body { height: 100%; margin: 0; }
+  body {
+    background: var(--bg); color: var(--text);
+    font: 14px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    display: grid; grid-template-rows: auto 1fr;
+  }
+  button { font: inherit; color: inherit; cursor: pointer; }
+  code, pre, .mono { font-family: ui-monospace, "Cascadia Code", "SF Mono", Consolas, monospace; font-size: 12.5px; }
+
+  /* Top bar */
+  header.top {
+    display: flex; align-items: center; gap: 12px;
+    padding: 10px 16px; background: var(--panel); border-bottom: 1px solid var(--border);
+  }
+  .brand { display: flex; align-items: center; gap: 8px; font-weight: 650; font-size: 15px; }
+  .brand svg { width: 22px; height: 22px; }
+  .status { display: inline-flex; align-items: center; gap: 6px; color: var(--muted); font-size: 12.5px; }
+  .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--faint); flex: none; }
+  .dot.on { background: var(--ok); }
+  .dot.warn { background: var(--warn); }
+  .spacer { flex: 1; }
+  .icon-btn {
+    border: 1px solid var(--border); background: transparent; border-radius: 8px;
+    width: 32px; height: 32px; display: inline-grid; place-items: center; color: var(--muted);
+  }
+  .icon-btn:hover { background: var(--panel-2); color: var(--text); }
+  .update {
+    display: none; align-items: center; gap: 10px; font-size: 13px;
+    background: var(--accent-soft); color: var(--text); border-radius: 8px; padding: 4px 6px 4px 12px;
+  }
+  .update.show { display: inline-flex; }
+  .btn {
+    border: 1px solid var(--border); background: var(--panel); border-radius: 8px; padding: 6px 12px;
+  }
+  .btn:hover { background: var(--panel-2); }
+  .btn.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-text); font-weight: 550; }
+  .btn.primary:hover { filter: brightness(1.06); }
+  .btn:disabled { opacity: .55; cursor: default; }
+
+  /* Layout */
+  .layout { display: grid; grid-template-columns: 280px 1fr; min-height: 0; }
+  aside {
+    background: var(--panel); border-right: 1px solid var(--border);
+    overflow-y: auto; padding: 12px 8px 24px;
+  }
+  .section-title {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 10px 10px 6px; color: var(--muted); font-size: 11.5px; font-weight: 600;
+    text-transform: uppercase; letter-spacing: .06em;
+  }
+  .section-title button { border: 0; background: none; color: var(--accent); font-size: 12px; text-transform: none; letter-spacing: 0; font-weight: 550; }
+  .nav-item {
+    display: flex; align-items: flex-start; gap: 10px; width: 100%; text-align: left;
+    border: 0; background: none; border-radius: 8px; padding: 8px 10px; color: var(--text);
+  }
+  .nav-item:hover { background: var(--panel-2); }
+  .nav-item.active { background: var(--accent-soft); }
+  .nav-item .hash { color: var(--faint); font-weight: 600; width: 12px; flex: none; }
+  .nav-item .body { min-width: 0; flex: 1; }
+  .nav-item .name { font-weight: 550; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .nav-item .sub { color: var(--muted); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .count { color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; padding-top: 1px; }
+  .session { display: flex; gap: 10px; align-items: flex-start; padding: 7px 10px; }
+  .session .dot { margin-top: 7px; }
+  .empty-side { color: var(--faint); font-size: 12.5px; padding: 4px 10px 8px; }
+
+  /* Conversation */
+  main { display: grid; grid-template-rows: auto 1fr auto; min-height: 0; }
+  .conv-head { padding: 14px 24px 12px; border-bottom: 1px solid var(--border); background: var(--panel); display: flex; gap: 16px; align-items: flex-start; }
+  .conv-head h1 { margin: 0; font-size: 17px; font-weight: 650; }
+  .conv-head .desc { color: var(--muted); margin-top: 2px; }
+  .chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+  .chip {
+    display: inline-flex; align-items: center; gap: 6px; font-size: 12px;
+    background: var(--panel-2); border-radius: 999px; padding: 2px 10px 2px 8px; color: var(--muted);
+  }
+  .messages { overflow-y: auto; padding: 16px 24px; }
+  .msg { display: grid; grid-template-columns: 32px 1fr; gap: 12px; padding: 8px 0; max-width: 900px; }
+  .msg.cont { padding-top: 0; }
+  .msg.cont .avatar { visibility: hidden; height: 0; }
+  .avatar {
+    width: 32px; height: 32px; border-radius: 8px; display: grid; place-items: center;
+    font-weight: 650; font-size: 12.5px; color: #fff;
+  }
+  .meta { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
+  .sender { font-weight: 600; }
+  .time { color: var(--faint); font-size: 12px; }
+  .topic-tag { color: var(--accent); font-size: 12px; font-weight: 550; border: 0; background: none; padding: 0; }
+  .content { white-space: pre-wrap; overflow-wrap: anywhere; }
+  .content code { background: var(--code-bg); border: 1px solid var(--border); border-radius: 4px; padding: 0 4px; }
+  .content pre code { background: none; border: 0; padding: 0; }
+  .content pre { background: var(--code-bg); border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px; overflow-x: auto; white-space: pre; margin: 6px 0; }
+  .day { text-align: center; color: var(--faint); font-size: 12px; margin: 14px 0 6px; }
+  .placeholder { max-width: 520px; margin: 12vh auto; text-align: center; color: var(--muted); }
+  .placeholder h2 { color: var(--text); font-size: 17px; margin: 0 0 8px; }
+  .placeholder pre { text-align: left; background: var(--code-bg); border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px; color: var(--text); white-space: pre-wrap; }
+
+  .composer { border-top: 1px solid var(--border); background: var(--panel); padding: 12px 24px 16px; }
+  .composer form { display: grid; gap: 8px; max-width: 900px; }
+  .composer .row { display: flex; gap: 8px; align-items: center; color: var(--muted); font-size: 12.5px; }
+  .composer input, .composer textarea {
+    font: inherit; color: var(--text); background: var(--bg); border: 1px solid var(--border); border-radius: 8px; padding: 6px 10px;
+  }
+  .composer input { width: 160px; }
+  .composer textarea { resize: vertical; min-height: 44px; max-height: 40vh; padding: 10px 12px; width: 100%; }
+  .composer input:focus, .composer textarea:focus { outline: 2px solid var(--accent); outline-offset: -1px; border-color: transparent; }
+  .hint { color: var(--faint); font-size: 12px; }
+
+  @media (max-width: 760px) {
+    .layout { grid-template-columns: 1fr; grid-template-rows: auto 1fr; }
+    aside { border-right: 0; border-bottom: 1px solid var(--border); max-height: 38vh; }
+    .messages, .composer, .conv-head { padding-left: 16px; padding-right: 16px; }
+    .status .label { display: none; }
+  }
+</style>
+</head>
+<body>
+<header class="top">
+  <div class="brand">
+    <svg viewBox="0 0 32 32" aria-hidden="true"><rect width="32" height="32" rx="8" fill="var(--accent)"/><path d="M9 10h14a2 2 0 0 1 2 2v7a2 2 0 0 1-2 2h-8l-5 4v-4H9a2 2 0 0 1-2-2v-7a2 2 0 0 1 2-2z" fill="var(--panel)"/></svg>
+    Parley
+  </div>
+  <span class="status" id="status"><span class="dot" id="status-dot"></span><span class="label" id="status-label">Connecting…</span></span>
+  <span class="spacer"></span>
+  <span class="update" id="update">
+    <span id="update-text"></span>
+    <button class="btn primary" id="update-btn" type="button">Update</button>
+  </span>
+  <span class="time" id="version"></span>
+  <button class="icon-btn" id="theme" type="button" title="Toggle theme" aria-label="Toggle theme">
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/></svg>
+  </button>
+</header>
+
+<div class="layout">
+  <aside>
+    <button class="nav-item" id="nav-all" type="button">
+      <span class="hash">≡</span>
+      <span class="body"><div class="name">All activity</div><div class="sub">Every topic, newest last</div></span>
+    </button>
+    <div class="section-title">Topics <button type="button" id="new-topic">+ New</button></div>
+    <div id="topics"></div>
+    <div class="section-title">Sessions</div>
+    <div id="sessions"></div>
+  </aside>
+
+  <main>
+    <div class="conv-head" id="conv-head"></div>
+    <div class="messages" id="messages"></div>
+    <div class="composer">
+      <form id="composer">
+        <div class="row">
+          <label for="sender">Send as</label><input id="sender" autocomplete="off" spellcheck="false">
+          <span id="topic-field-wrap" hidden><label for="topic-field">to #</label><input id="topic-field" autocomplete="off" spellcheck="false" placeholder="topic"></span>
+          <span class="spacer"></span><span class="hint">Ctrl + Enter to send</span>
+        </div>
+        <div class="row">
+          <textarea id="text" rows="2" placeholder="Message every agent on this topic…"></textarea>
+          <button class="btn primary" type="submit" id="send">Send</button>
+        </div>
+      </form>
+    </div>
+  </main>
+</div>
+
+<script>
+(() => {
+  const $ = (id) => document.getElementById(id);
+  const store = {
+    get(k, d) { try { return localStorage.getItem(k) ?? d; } catch { return d; } },
+    set(k, v) { try { localStorage.setItem(k, v); } catch {} },
+  };
+
+  // ---- theme -------------------------------------------------------------
+  const applyTheme = (t) => t ? document.documentElement.setAttribute('data-theme', t) : document.documentElement.removeAttribute('data-theme');
+  applyTheme(store.get('parley.theme', ''));
+  $('theme').onclick = () => {
+    const dark = getComputedStyle(document.documentElement).colorScheme.includes('dark');
+    const next = dark ? 'light' : 'dark';
+    applyTheme(next); store.set('parley.theme', next);
+  };
+
+  // ---- state -------------------------------------------------------------
+  let topics = [], sessions = [], messages = [];
+  let current = null; // topic name, or null for "All activity"
+
+  const api = async (path, opts) => {
+    const r = await fetch(path, opts);
+    if (!r.ok) throw new Error(r.status + ' ' + path);
+    return r.status === 204 || r.status === 202 ? null : r.json();
+  };
+
+  // ---- rendering helpers -------------------------------------------------
+  const el = (tag, props = {}, ...children) => {
+    const e = document.createElement(tag);
+    for (const [k, v] of Object.entries(props)) {
+      if (k === 'class') e.className = v;
+      else if (k.startsWith('on')) e.addEventListener(k.slice(2), v);
+      else if (v !== undefined && v !== null) e.setAttribute(k, v);
+    }
+    for (const c of children.flat()) if (c !== null && c !== undefined) e.append(c.nodeType ? c : document.createTextNode(c));
+    return e;
+  };
+  const hue = (s) => { let h = 0; for (const ch of s) h = (h * 31 + ch.charCodeAt(0)) % 360; return h; };
+  const initials = (s) => s.replace(/[^A-Za-z0-9]+/g, ' ').trim().split(' ').map(w => w[0]).join('').slice(0, 2).toUpperCase() || '?';
+  const fmtTime = (iso) => new Date(iso).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  const fmtDay = (iso) => new Date(iso).toLocaleDateString([], { weekday: 'long', month: 'short', day: 'numeric' });
+  const ago = (iso) => {
+    const s = (Date.now() - new Date(iso)) / 1000;
+    if (s < 60) return 'just now';
+    if (s < 3600) return Math.floor(s / 60) + ' min ago';
+    if (s < 86400) return Math.floor(s / 3600) + ' h ago';
+    return Math.floor(s / 86400) + ' d ago';
+  };
+
+  // Plain text with `inline code` and ``` fenced blocks — enough for what agents send.
+  const renderContent = (text) => {
+    const out = el('div', { class: 'content' });
+    const parts = text.split(/```/);
+    parts.forEach((part, i) => {
+      if (i % 2 === 1) {
+        out.append(el('pre', {}, el('code', {}, part.replace(/^[\w-]*\n/, '').replace(/\n$/, ''))));
+      } else {
+        // The newlines around a fence belong to the fence, not to the text.
+        if (i > 0) part = part.replace(/^\n/, '');
+        if (i < parts.length - 1) part = part.replace(/\n$/, '');
+        part.split(/`([^`\n]+)`/).forEach((seg, j) => out.append(j % 2 ? el('code', {}, seg) : document.createTextNode(seg)));
+      }
+    });
+    return out;
+  };
+
+  // ---- sidebar -----------------------------------------------------------
+  const renderSidebar = () => {
+    $('nav-all').classList.toggle('active', current === null);
+    const tl = $('topics'); tl.replaceChildren();
+    const sorted = [...topics].sort((a, b) => lastActivity(b) - lastActivity(a));
+    if (!sorted.length) tl.append(el('div', { class: 'empty-side' }, 'No topics yet.'));
+    for (const t of sorted) {
+      tl.append(el('button', {
+        class: 'nav-item' + (current && current.toLowerCase() === t.name.toLowerCase() ? ' active' : ''),
+        type: 'button', onclick: () => go(t.name),
+      },
+        el('span', { class: 'hash' }, '#'),
+        el('span', { class: 'body' },
+          el('div', { class: 'name' }, t.name),
+          el('div', { class: 'sub' }, t.description || (t.subscribers.length ? t.subscribers.join(', ') : 'no subscribers'))),
+        el('span', { class: 'count' }, String(t.messageCount))));
+    }
+
+    const sl = $('sessions'); sl.replaceChildren();
+    const ss = [...sessions].sort((a, b) => (b.listeners > 0) - (a.listeners > 0) || new Date(b.lastSeen) - new Date(a.lastSeen));
+    if (!ss.length) sl.append(el('div', { class: 'empty-side' }, 'No agent has called in since the hub started.'));
+    for (const s of ss) {
+      const live = s.listeners > 0;
+      sl.append(el('div', { class: 'session', title: live ? 'Connected — messages are pushed to it' : 'Not connected' },
+        el('span', { class: 'dot' + (live ? ' on' : '') }),
+        el('span', { class: 'body' },
+          el('div', { class: 'name' }, s.name),
+          el('div', { class: 'sub' }, (live ? 'connected' : 'seen ' + ago(s.lastSeen)) + (s.workingDir ? ' · ' + s.workingDir : '')))));
+    }
+  };
+  const lastActivity = (t) => {
+    let max = new Date(t.createdAt).getTime();
+    for (const m of messages) if (m.topic.toLowerCase() === t.name.toLowerCase()) max = Math.max(max, new Date(m.createdAt).getTime());
+    return max;
+  };
+
+  // ---- conversation ------------------------------------------------------
+  const visible = () => current === null ? messages : messages.filter(m => m.topic.toLowerCase() === current.toLowerCase());
+
+  const renderHead = () => {
+    const h = $('conv-head'); h.replaceChildren();
+    if (current === null) {
+      h.append(el('div', {}, el('h1', {}, 'All activity'), el('div', { class: 'desc' }, `${topics.length} topic${topics.length === 1 ? '' : 's'} · ${sessions.filter(s => s.listeners > 0).length} connected`)));
+      return;
+    }
+    const t = topics.find(x => x.name.toLowerCase() === current.toLowerCase());
+    const info = el('div', { style: 'flex:1;min-width:0' },
+      el('h1', {}, '#' + current),
+      t?.description ? el('div', { class: 'desc' }, t.description) : null,
+      el('div', { class: 'chips' }, (t?.subscribers || []).map(name => {
+        const s = sessions.find(x => x.name.toLowerCase() === name.toLowerCase());
+        return el('span', { class: 'chip' }, el('span', { class: 'dot' + (s?.listeners > 0 ? ' on' : '') }), name);
+      })));
+    h.append(info);
+    if (t) h.append(el('button', { class: 'icon-btn', type: 'button', title: 'Delete topic', 'aria-label': 'Delete topic', onclick: () => deleteTopic(t.name) },
+      trashIcon()));
+  };
+
+  const renderMessages = (stick) => {
+    const box = $('messages');
+    const nearBottom = box.scrollHeight - box.scrollTop - box.clientHeight < 80;
+    box.replaceChildren();
+    const list = visible();
+    if (!list.length) {
+      box.append(current === null ? emptyAll() : el('div', { class: 'placeholder' },
+        el('h2', {}, 'No messages on #' + current),
+        el('div', {}, 'Send the first one below — every agent subscribed to this topic receives it.')));
+    }
+    let prev = null, prevDay = null;
+    for (const m of list) {
+      const day = new Date(m.createdAt).toDateString();
+      if (day !== prevDay) { box.append(el('div', { class: 'day' }, fmtDay(m.createdAt))); prev = null; prevDay = day; }
+      const cont = prev && prev.sender === m.sender && prev.topic === m.topic && (new Date(m.createdAt) - new Date(prev.createdAt)) < 5 * 60e3;
+      const h = hue(m.sender);
+      box.append(el('div', { class: 'msg' + (cont ? ' cont' : '') },
+        el('div', { class: 'avatar', style: `background:hsl(${h} 55% 48%)` }, initials(m.sender)),
+        el('div', {},
+          cont ? null : el('div', { class: 'meta' },
+            el('span', { class: 'sender' }, m.sender),
+            current === null ? el('button', { class: 'topic-tag', type: 'button', onclick: () => go(m.topic) }, '#' + m.topic) : null,
+            el('span', { class: 'time', title: new Date(m.createdAt).toLocaleString() }, fmtTime(m.createdAt))),
+          renderContent(m.content))));
+      prev = m;
+    }
+    if (stick || nearBottom) box.scrollTop = box.scrollHeight;
+  };
+
+  const trashIcon = () => {
+    const ns = 'http://www.w3.org/2000/svg';
+    const svg = document.createElementNS(ns, 'svg');
+    for (const [k, v] of Object.entries({ width: 16, height: 16, viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor',
+      'stroke-width': 2, 'stroke-linecap': 'round', 'stroke-linejoin': 'round' })) svg.setAttribute(k, v);
+    const path = document.createElementNS(ns, 'path');
+    path.setAttribute('d', 'M3 6h18M8 6V4h8v2M19 6l-1 14H6L5 6M10 11v6M14 11v6');
+    svg.append(path);
+    return svg;
+  };
+
+  const emptyAll = () => el('div', { class: 'placeholder' },
+    el('h2', {}, 'No conversations yet'),
+    el('div', {}, 'Agents create topics as they talk. Register Parley with your AI clients, then ask a session to message another:'),
+    el('pre', {}, 'parley install\n\n# in a Claude Code session:\n"Tell the frontend session on topic api-contract that UserDTO gained an email field"'));
+
+  const renderComposer = () => {
+    $('topic-field-wrap').hidden = current !== null;
+    $('text').placeholder = current === null ? 'Message a topic…' : `Message every agent on #${current}…`;
+  };
+
+  const render = (stick) => { renderSidebar(); renderHead(); renderMessages(stick); renderComposer(); };
+
+  // ---- navigation --------------------------------------------------------
+  const go = (topic) => { location.hash = topic ? '#/topic/' + encodeURIComponent(topic) : '#/'; };
+  const fromHash = () => {
+    const m = location.hash.match(/^#\/topic\/(.+)$/);
+    current = m ? decodeURIComponent(m[1]) : null;
+    render(true);
+  };
+  window.addEventListener('hashchange', fromHash);
+  $('nav-all').onclick = () => go(null);
+  $('new-topic').onclick = () => {
+    const name = prompt('New topic name (it is created with its first message):');
+    if (name && name.trim()) { go(name.trim()); setTimeout(() => $('text').focus(), 0); }
+  };
+
+  // ---- actions -----------------------------------------------------------
+  $('sender').value = store.get('parley.sender', 'human');
+  $('sender').onchange = () => store.set('parley.sender', $('sender').value.trim() || 'human');
+
+  $('composer').onsubmit = async (e) => {
+    e.preventDefault();
+    const content = $('text').value;
+    const topic = (current ?? $('topic-field').value).trim();
+    const session = $('sender').value.trim() || 'human';
+    if (!content.trim() || !topic) { (topic ? $('text') : $('topic-field')).focus(); return; }
+    $('send').disabled = true;
+    try {
+      await api('/api/messages', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ session, topic, content }) });
+      $('text').value = '';
+      if (current === null) go(topic);
+    } catch (err) {
+      alert('Could not send: ' + err.message);
+    } finally {
+      $('send').disabled = false; $('text').focus();
+    }
+  };
+  $('text').addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); $('composer').requestSubmit(); }
+  });
+
+  const deleteTopic = async (name) => {
+    if (!confirm(`Delete #${name} and all its messages? Subscribed agents lose it too.`)) return;
+    await api('/api/topics/' + encodeURIComponent(name), { method: 'DELETE' });
+    go(null);
+  };
+
+  $('update-btn').onclick = async () => {
+    $('update-btn').disabled = true; $('update-text').textContent = 'Updating… the hub restarts in a moment';
+    try { await api('/api/update', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' }); }
+    catch (err) { $('update-text').textContent = 'Update failed to start: ' + err.message; $('update-btn').disabled = false; }
+  };
+
+  // ---- live data ---------------------------------------------------------
+  const refreshMeta = async () => {
+    [topics, sessions] = await Promise.all([api('/api/topics'), api('/api/sessions')]);
+    render(false);
+  };
+  const refreshAll = async () => {
+    const [t, s, m, h] = await Promise.all([api('/api/topics'), api('/api/sessions'), api('/api/messages?count=500'), api('/api/health')]);
+    topics = t; sessions = s; messages = m;
+    $('version').textContent = 'v' + h.version;
+    const up = h.updateAvailable;
+    $('update').classList.toggle('show', !!up);
+    if (up) $('update-text').textContent = `Parley ${h.latest} is available`;
+    render(true);
+  };
+
+  let metaTimer = null;
+  const scheduleMeta = () => { clearTimeout(metaTimer); metaTimer = setTimeout(() => refreshMeta().catch(() => {}), 250); };
+
+  const setStatus = (state) => {
+    $('status-dot').className = 'dot' + (state === 'live' ? ' on' : state === 'retry' ? ' warn' : '');
+    $('status-label').textContent = state === 'live' ? 'Live' : state === 'retry' ? 'Reconnecting…' : 'Connecting…';
+  };
+
+  const connect = () => {
+    const es = new EventSource('/api/events');
+    es.addEventListener('ready', () => { setStatus('live'); refreshAll().catch(() => {}); });
+    es.addEventListener('message', (e) => {
+      const m = JSON.parse(e.data);
+      if (!messages.some(x => x.id === m.id)) messages.push(m);
+      renderMessages(false); scheduleMeta();
+    });
+    es.addEventListener('changed', scheduleMeta);
+    es.onerror = () => setStatus('retry'); // EventSource reconnects on its own
+  };
+
+  fromHash();
+  connect();
+  setInterval(() => renderSidebar(), 60e3); // keep "seen 5 min ago" honest
+})();
+</script>
+</body>
+</html>

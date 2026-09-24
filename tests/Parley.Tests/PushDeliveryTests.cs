@@ -105,6 +105,43 @@ public class PushDeliveryTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task WebUi_IsServedAtRoot()
+    {
+        var html = await _http.GetStringAsync(_url + "/");
+        html.ShouldContain("<title>Parley</title>");
+    }
+
+    [Fact]
+    public async Task ForeignHostHeader_IsRejected()
+    {
+        // A DNS-rebinding page reaches 127.0.0.1 under its own host name.
+        var req = new HttpRequestMessage(HttpMethod.Get, _url + "/api/topics");
+        req.Headers.Host = "evil.example";
+        (await _http.SendAsync(req)).StatusCode.ShouldBe(HttpStatusCode.MisdirectedRequest);
+    }
+
+    [Fact]
+    public async Task CrossSiteStylePosts_AreRefused()
+    {
+        // What an HTML form or no-cors fetch can send: no JSON content type.
+        var send = await _http.PostAsync(_url + "/api/messages",
+            new StringContent("{\"session\":\"x\",\"topic\":\"t\",\"content\":\"c\"}", System.Text.Encoding.UTF8, "text/plain"));
+        send.IsSuccessStatusCode.ShouldBeFalse();
+        var mcp = await _http.PostAsync(_url + "/mcp",
+            new StringContent(Rpc("initialize", new { }), System.Text.Encoding.UTF8, "text/plain"));
+        mcp.StatusCode.ShouldBe(HttpStatusCode.UnsupportedMediaType);
+        _hub.GetRecentMessages().ShouldBeEmpty();
+    }
+
+    [Fact]
+    public async Task DeleteTopic_Endpoint()
+    {
+        _hub.SendMessage("a", "gone", "x");
+        (await _http.DeleteAsync(_url + "/api/topics/gone")).StatusCode.ShouldBe(HttpStatusCode.NoContent);
+        _hub.GetTopics().ShouldBeEmpty();
+    }
+
+    [Fact]
     public async Task Shim_IgnoresNotifications_AndAnswersPing()
     {
         var shim = new McpShim("frontend", "/src/frontend", _url, _ => { });

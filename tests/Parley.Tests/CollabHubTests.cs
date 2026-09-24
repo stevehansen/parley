@@ -179,7 +179,7 @@ public class CollabHubTests : IDisposable
     [Fact]
     public void Persistence_StaleTopicsPruned()
     {
-        var old = DateTime.UtcNow.AddHours(-48);
+        var old = DateTime.UtcNow.AddDays(-10);
         WriteState(new
         {
             nextMessageId = 2,

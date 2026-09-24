@@ -1,0 +1,119 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+  id-token: write
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v6
+        with:
+          global-json-file: global.json
+
+      - name: Validate version matches tag
+        run: |
+          TAG_VERSION="${GITHUB_REF_NAME#v}"
+          CODE_VERSION=$(sed -n 's:.*<Version>\(.*\)</Version>.*:\1:p' src/Parley/Parley.csproj)
+          if [ "$TAG_VERSION" != "$CODE_VERSION" ]; then
+            echo "::error::Tag version ($TAG_VERSION) does not match <Version> in Parley.csproj ($CODE_VERSION)"
+            exit 1
+          fi
+
+      - name: Build & Test
+        run: dotnet test Parley.slnx -c Release
+
+  # Publish the HC.Parley dotnet tool to NuGet (OIDC trusted publishing)
+  publish-nuget:
+    needs: test
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v6
+        with:
+          global-json-file: global.json
+
+      - name: Pack dotnet tool
+        run: dotnet pack src/Parley/Parley.csproj -c Release -o ./nupkg
+
+      - name: NuGet login (OIDC)
+        uses: nuget/login@v1
+        id: nuget-login
+        with:
+          user: ${{ vars.NUGET_USER }}
+
+      - name: Push to NuGet
+        run: >
+          dotnet nuget push ./nupkg/*.nupkg
+          --api-key ${{ steps.nuget-login.outputs.NUGET_API_KEY }}
+          --source https://api.nuget.org/v3/index.json
+          --skip-duplicate
+
+      - name: Upload package
+        uses: actions/upload-artifact@v7
+        with:
+          name: nupkg
+          path: ./nupkg/*.nupkg
+
+  create-release:
+    needs: publish-nuget
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Generate changelog
+        id: changelog
+        run: |
+          PREV_TAG=$(git describe --tags --abbrev=0 HEAD^ 2>/dev/null || echo "")
+          if [ -z "$PREV_TAG" ]; then
+            LOG=$(git log --pretty=format:"- %s (%h)" --no-merges)
+          else
+            LOG=$(git log ${PREV_TAG}..HEAD --pretty=format:"- %s (%h)" --no-merges)
+          fi
+          echo "changelog<<EOF" >> $GITHUB_OUTPUT
+          echo "$LOG" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+
+      - name: Download package
+        uses: actions/download-artifact@v8
+        with:
+          name: nupkg
+          path: ./nupkg
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v3
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: Parley ${{ github.ref_name }}
+          body: |
+            ## Install / Update
+
+            ```bash
+            # First install
+            dotnet tool install -g HC.Parley
+            parley install
+
+            # Update existing (restart your AI sessions afterwards)
+            dotnet tool update -g HC.Parley
+            ```
+
+            ## Changes
+
+            ${{ steps.changelog.outputs.changelog }}
+          files: nupkg/*.nupkg
+          prerelease: ${{ contains(github.ref_name, '-') }}

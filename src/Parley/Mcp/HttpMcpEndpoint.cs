@@ -15,10 +15,6 @@ namespace Parley.Mcp;
 /// </summary>
 public sealed class HttpMcpEndpoint(CollabHub hub)
 {
-    private const string Instructions =
-        "Parley lets you coordinate with other AI coding sessions through pub/sub topics. Topics and subscriptions are automatic: send_message and read_messages create and join topics as needed. "
-        + "Every tool result lists unread messages on your topics — check them. Use read_messages with a timeout to wait for a reply.";
-
     private readonly object _lock = new();
     private readonly Dictionary<string, string> _sessionNames = new(); // Mcp-Session-Id → name
     private int _nextAutoSessionId;
@@ -85,7 +81,7 @@ public sealed class HttpMcpEndpoint(CollabHub hub)
                 protocolVersion = Protocol.Negotiate(request.Params),
                 capabilities = new { tools = new { listChanged = false } },
                 serverInfo = new { name = "parley", version = Protocol.Version },
-                instructions = Instructions,
+                instructions = AgentInstructions.WithoutPush,
             }),
             "ping" => JsonRpcResponse.Success(request.Id, new { }),
             "tools/list" => JsonRpcResponse.Success(request.Id,
