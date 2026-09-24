@@ -11,7 +11,7 @@
     <PackAsTool>true</PackAsTool>
     <ToolCommandName>parley</ToolCommandName>
     <PackageId>HC.Parley</PackageId>
-    <Version>0.1.1</Version>
+    <Version>0.1.2</Version>
 
     <Authors>Steve Hansen</Authors>
     <Description>Pub/sub topics for AI coding agents — lets Claude Code sessions message each other, with push delivery via Claude Code channels.</Description>
