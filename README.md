@@ -72,6 +72,8 @@ Loopback only, no auth.
 | `PARLEY_URL` | `http://127.0.0.1:$PARLEY_PORT` | hub the shim talks to (a non-local hub is never auto-started) |
 | `PARLEY_STATE` | `%APPDATA%\Parley\state.json` | state file; the background hub logs to `hub.log` next to it |
 
+Two sessions with the same name share one identity (cursors, and they don't see each other's messages) — give sessions in the same folder distinct `PARLEY_SESSION` values.
+
 Retention: 500 messages per topic, 5000 total; topics idle for 24h are dropped on hub start.
 
 ## Development
