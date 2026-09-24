@@ -47,6 +47,12 @@ internal static class UpdateCommand
         ToolFiles.DeleteLeftovers(toolShim);
         var moved = OperatingSystem.IsWindows() ? ToolFiles.MoveInUseAside(toolShim) : [];
         var (code, output) = DotnetToolUpdate(version);
+        // dotnet can exit 0 having installed nothing (stale cache, odd sources): ask the new binary.
+        if (code == 0 && InstalledVersion(toolShim) is var installed && installed != version)
+        {
+            code = 1;
+            output = $"dotnet tool update succeeded, but the installed parley reports version {installed ?? "(none)"}.\n{output}";
+        }
         if (code != 0) ToolFiles.Restore(moved);
 
         // A shim may have restarted a hub meanwhile (its reconnect loop does that): replace it too.
@@ -126,6 +132,24 @@ internal static class UpdateCommand
         var stdout = p.StandardOutput.ReadToEnd();
         p.WaitForExit();
         return (p.ExitCode, stdout + stderr.Result);
+    }
+
+    private static string? InstalledVersion(string toolShim)
+    {
+        try
+        {
+            using var p = Process.Start(new ProcessStartInfo(toolShim, "--version")
+            {
+                RedirectStandardOutput = true,
+                UseShellExecute = false,
+            })!;
+            var text = p.StandardOutput.ReadToEnd().Trim();
+            return p.WaitForExit(10000) && p.ExitCode == 0 ? text : null;
+        }
+        catch (System.ComponentModel.Win32Exception)
+        {
+            return null;
+        }
     }
 
     private static void AppendLog(string line)
