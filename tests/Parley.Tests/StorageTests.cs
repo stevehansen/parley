@@ -108,26 +108,42 @@ public class StorageTests : IDisposable
         again.GetRecentMessages().Count.ShouldBe(2);
     }
 
+    /// <summary>A NuGet registration index with one inline page.</summary>
+    private static string Registration(params string[] versions) =>
+        JsonSerializer.Serialize(new { items = new[] { new { items = versions.Select(v => new
+        {
+            catalogEntry = new { version = v.TrimEnd('!'), listed = !v.EndsWith('!') }, // "x!" = unlisted
+        }) } } });
+
     [Theory]
-    [InlineData("""{"versions":["0.1.0","0.2.0","0.10.0-beta"]}""", "0.2.0")]
-    [InlineData("""{"versions":["0.9.0","0.10.0"]}""", "0.10.0")]
-    [InlineData("""{"versions":[]}""", null)]
-    [InlineData("not json", null)]
-    public void UpdateChecker_PicksNewestStable(string json, string? expected)
+    [InlineData("0.1.0,0.2.0,0.10.0-beta", "0.2.0")]
+    [InlineData("0.9.0,0.10.0", "0.10.0")]
+    [InlineData("0.1.0,0.2.0!", "0.1.0")]
+    [InlineData("", null)]
+    public void UpdateChecker_PicksNewestListedStable(string versions, string? expected)
     {
+        var json = Registration(versions.Split(',', StringSplitOptions.RemoveEmptyEntries));
         UpdateChecker.SelectLatestStable(json)?.ToString(3).ShouldBe(expected);
         if (expected == null) UpdateChecker.SelectLatestStable(json).ShouldBeNull();
+    }
+
+    [Fact]
+    public void UpdateChecker_ReadsPagedOutIndexes_AndSurvivesGarbage()
+    {
+        UpdateChecker.SelectLatestStable("""{"items":[{"lower":"0.1.0","upper":"0.3.0"}]}""")?.ToString(3).ShouldBe("0.3.0");
+        UpdateChecker.SelectLatestStable("not json").ShouldBeNull();
+        UpdateChecker.SelectLatestStable("""{"items":[{"items":[{}]}]}""").ShouldBeNull();
     }
 
     [Fact]
     public async Task UpdateChecker_SameVersion_IsNotAnUpdate()
     {
         var current = UpdateChecker.Current.ToString(3);
-        var checker = new UpdateChecker(_ => Task.FromResult<string?>($$"""{"versions":["{{current}}"]}"""));
+        var checker = new UpdateChecker(_ => Task.FromResult<string?>(Registration(current)));
         await checker.CheckAsync();
         checker.UpdateAvailable.ShouldBeFalse();
 
-        var newer = new UpdateChecker(_ => Task.FromResult<string?>("""{"versions":["99.0.0"]}"""));
+        var newer = new UpdateChecker(_ => Task.FromResult<string?>(Registration("99.0.0")));
         await newer.CheckAsync();
         newer.UpdateAvailable.ShouldBeTrue();
     }
