@@ -20,19 +20,20 @@ public class SseReaderTests
     public async Task Heartbeats_KeepTheStreamAlive()
     {
         var pipe = new Pipe();
+        // Longer overall than the idle limit, with gaps far below it: slow CI runners stretch delays.
         var writer = Task.Run(async () =>
         {
-            for (var i = 0; i < 8; i++)
+            for (var i = 0; i < 30; i++)
             {
                 await Write(pipe, ": heartbeat\n\n");
-                await Task.Delay(75);
+                await Task.Delay(50);
             }
             await Write(pipe, "event: message\ndata: hello\n\n");
             await pipe.Writer.CompleteAsync();
         });
 
         var events = new List<(string evt, string data)>();
-        await foreach (var e in SseReader.ReadAsync(pipe.Reader.AsStream(), TimeSpan.FromMilliseconds(300), default))
+        await foreach (var e in SseReader.ReadAsync(pipe.Reader.AsStream(), TimeSpan.FromSeconds(1), default))
             events.Add(e);
         await writer;
         events.ShouldBe([("message", "hello")]);

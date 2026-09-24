@@ -28,7 +28,7 @@ internal static class SseReader
             }
             catch (OperationCanceledException) when (!ct.IsCancellationRequested)
             {
-                throw new TimeoutException($"No data from the event stream for {idleTimeout.TotalSeconds:0} s");
+                throw new TimeoutException($"No data from the event stream for {idleTimeout.TotalSeconds:0.#} s");
             }
             if (line == null) yield break;
 
