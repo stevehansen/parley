@@ -45,6 +45,13 @@ switch (args.FirstOrDefault())
         return await McpShim.RunStdioAsync(cts.Token);
 
     case "serve":
+        // Another hub (e.g. auto-started by a shim before the service ran) already serves: that is
+        // success, not a crash to restart. Checked before touching hub.log, which that hub holds open.
+        if (await HubAlreadyRunningAsync(ParleyConfig.Port))
+        {
+            if (!args.Contains("--background")) Console.WriteLine($"A Parley hub is already running on port {ParleyConfig.Port}.");
+            return 0;
+        }
         if (args.Contains("--background"))
         {
             // Started by a shim: nobody reads our console, so keep a log instead.
@@ -83,6 +90,31 @@ switch (args.FirstOrDefault())
     default:
         Console.WriteLine(usage);
         return args.Length == 0 || args[0] is "-h" or "--help" or "help" ? 0 : 1;
+}
+
+// Binding first keeps the common case (port free) instant; only a taken port costs a health probe.
+static async Task<bool> HubAlreadyRunningAsync(int port)
+{
+    try
+    {
+        var probe = new System.Net.Sockets.TcpListener(System.Net.IPAddress.Loopback, port);
+        probe.Start();
+        probe.Stop();
+        return false;
+    }
+    catch (System.Net.Sockets.SocketException)
+    {
+        try
+        {
+            using var http = new HttpClient { Timeout = TimeSpan.FromSeconds(3) };
+            var health = await http.GetStringAsync($"http://127.0.0.1:{port}/api/health");
+            return health.Contains("\"name\":\"parley\"");
+        }
+        catch (Exception)
+        {
+            return false;
+        }
+    }
 }
 
 internal static class Native

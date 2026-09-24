@@ -76,6 +76,9 @@ internal static class ServiceManager
     private static string InstallScheduledTask(string shimPath)
     {
         Run("schtasks.exe", $"/delete /tn {TaskName} /f");
+        // Naming the user matters: a logon trigger without one fires for every user, which only an
+        // elevated shell may register ("Access is denied" otherwise).
+        var user = SecurityElement.Escape($@"{Environment.UserDomainName}\{Environment.UserName}");
         var xml = $"""
             <?xml version="1.0" encoding="UTF-16"?>
             <Task version="1.2" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
@@ -85,10 +88,12 @@ internal static class ServiceManager
               <Triggers>
                 <LogonTrigger>
                   <Enabled>true</Enabled>
+                  <UserId>{user}</UserId>
                 </LogonTrigger>
               </Triggers>
               <Principals>
                 <Principal>
+                  <UserId>{user}</UserId>
                   <LogonType>InteractiveToken</LogonType>
                   <RunLevel>LeastPrivilege</RunLevel>
                 </Principal>
