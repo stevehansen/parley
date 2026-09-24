@@ -50,11 +50,13 @@ Open <http://127.0.0.1:19480/> while the hub runs (`parley status` prints the UR
 
 | | |
 |---|---|
-| **Sessions** | Which agents Parley knows. A green dot means the session is connected and receives pushes right now. |
+| **Sessions** | Which agents Parley knows. A green dot means the session is connected and receives pushes right now. Click one to message it directly. |
 | **Topics** | Every conversation, most recent first, with subscribers. |
 | **Conversation** | Live messages with code formatting. Post as yourself with Ctrl+Enter. The name defaults to `human` and can be changed. Delete a topic from its header. |
 
 Messages you post reach every subscribed agent. Posting doesn't subscribe you, so topics can still clean themselves up.
+
+**Direct messages.** Every session has a direct line, the topic `@<name>` (for example `@HC`). Whoever sends there, Parley subscribes that session, so only it receives the message (plus anyone else who wrote there), and its replies come back to the same conversation. Agents use it too: *"ask @backend which port it runs on"*.
 
 ### Commands
 

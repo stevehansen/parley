@@ -96,7 +96,6 @@
   .nav-item .name { font-weight: 550; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .nav-item .sub { color: var(--muted); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .count { color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; padding-top: 1px; }
-  .session { display: flex; gap: 10px; align-items: flex-start; padding: 7px 10px; }
   .session .dot { margin-top: 7px; }
   .empty-side { color: var(--faint); font-size: 12.5px; padding: 4px 10px 8px; }
 
@@ -187,7 +186,7 @@
       <form id="composer">
         <div class="row">
           <label for="sender">Send as</label><input id="sender" autocomplete="off" spellcheck="false">
-          <span id="topic-field-wrap" hidden><label for="topic-field">to #</label><input id="topic-field" autocomplete="off" spellcheck="false" placeholder="topic"></span>
+          <span id="topic-field-wrap" hidden><label for="topic-field">to</label><input id="topic-field" list="targets" autocomplete="off" spellcheck="false" placeholder="topic or @session"><datalist id="targets"></datalist></span>
           <span class="spacer"></span><span class="hint">Ctrl + Enter to send</span>
         </div>
         <div class="row">
@@ -270,16 +269,16 @@
   const renderSidebar = () => {
     $('nav-all').classList.toggle('active', current === null);
     const tl = $('topics'); tl.replaceChildren();
-    const sorted = [...topics].sort((a, b) => lastActivity(b) - lastActivity(a));
+    const sorted = topics.filter(t => !sessionOf(t.name)).sort((a, b) => lastActivity(b) - lastActivity(a));
     if (!sorted.length) tl.append(el('div', { class: 'empty-side' }, 'No topics yet.'));
     for (const t of sorted) {
       tl.append(el('button', {
         class: 'nav-item' + (current && current.toLowerCase() === t.name.toLowerCase() ? ' active' : ''),
         type: 'button', onclick: () => go(t.name),
       },
-        el('span', { class: 'hash' }, '#'),
+        el('span', { class: 'hash' }, t.name.startsWith('@') ? '@' : '#'),
         el('span', { class: 'body' },
-          el('div', { class: 'name' }, t.name),
+          el('div', { class: 'name' }, t.name.startsWith('@') ? t.name.slice(1) : t.name),
           el('div', { class: 'sub' }, t.description || (t.subscribers.length ? t.subscribers.join(', ') : 'no subscribers'))),
         el('span', { class: 'count' }, String(t.messageCount))));
     }
@@ -289,13 +288,24 @@
     if (!ss.length) sl.append(el('div', { class: 'empty-side' }, 'No agent has called in since the hub started.'));
     for (const s of ss) {
       const live = s.listeners > 0;
-      sl.append(el('div', { class: 'session', title: live ? 'Connected — messages are pushed to it' : 'Not connected' },
+      const dm = topics.find(t => same(t.name, '@' + s.name));
+      sl.append(el('button', {
+        class: 'nav-item session' + (same(current, '@' + s.name) ? ' active' : ''), type: 'button',
+        title: (live ? 'Connected — messages are pushed to it' : 'Not connected') + '. Click to message it directly.',
+        onclick: () => { go('@' + s.name); $('text').focus(); },
+      },
         el('span', { class: 'dot' + (live ? ' on' : '') }),
         el('span', { class: 'body' },
           el('div', { class: 'name' }, s.name),
-          el('div', { class: 'sub' }, (live ? 'connected' : 'seen ' + ago(s.lastSeen)) + (s.workingDir ? ' · ' + s.workingDir : '')))));
+          el('div', { class: 'sub' }, (live ? 'connected' : 'seen ' + ago(s.lastSeen)) + (s.workingDir ? ' · ' + s.workingDir : ''))),
+        dm ? el('span', { class: 'count' }, String(dm.messageCount)) : null));
     }
   };
+  const same = (a, b) => a != null && b != null && a.toLowerCase() === b.toLowerCase();
+  // The listed session a direct topic ("@name") belongs to, if any.
+  const sessionOf = (topic) => topic?.startsWith('@') ? sessions.find(s => same('@' + s.name, topic)) : undefined;
+  const label = (topic) => topic.startsWith('@') ? topic : '#' + topic;
+
   const lastActivity = (t) => {
     let max = new Date(t.createdAt).getTime();
     for (const m of messages) if (m.topic.toLowerCase() === t.name.toLowerCase()) max = Math.max(max, new Date(m.createdAt).getTime());
@@ -312,9 +322,14 @@
       return;
     }
     const t = topics.find(x => x.name.toLowerCase() === current.toLowerCase());
+    const who = sessionOf(current);
+    const desc = who
+      ? (who.listeners > 0 ? `Direct messages with ${who.name}. It is connected: what you send is pushed to it.`
+                           : `Direct messages with ${who.name}. Not connected: it sees them when it next calls in.`)
+      : t?.description;
     const info = el('div', { style: 'flex:1;min-width:0' },
-      el('h1', {}, '#' + current),
-      t?.description ? el('div', { class: 'desc' }, t.description) : null,
+      el('h1', {}, label(current)),
+      desc ? el('div', { class: 'desc' }, desc) : null,
       el('div', { class: 'chips' }, (t?.subscribers || []).map(name => {
         const s = sessions.find(x => x.name.toLowerCase() === name.toLowerCase());
         return el('span', { class: 'chip' }, el('span', { class: 'dot' + (s?.listeners > 0 ? ' on' : '') }), name);
@@ -331,8 +346,10 @@
     const list = visible();
     if (!list.length) {
       box.append(current === null ? emptyAll() : el('div', { class: 'placeholder' },
-        el('h2', {}, 'No messages on #' + current),
-        el('div', {}, 'Send the first one below — every agent subscribed to this topic receives it.')));
+        el('h2', {}, sessionOf(current) ? 'No messages with ' + current.slice(1) + ' yet' : 'No messages on ' + label(current)),
+        el('div', {}, sessionOf(current)
+          ? 'Send one below. Only this session receives it, and its replies show up here.'
+          : 'Send the first one below — every agent subscribed to this topic receives it.')));
     }
     let prev = null, prevDay = null;
     for (const m of list) {
@@ -345,7 +362,7 @@
         el('div', {},
           cont ? null : el('div', { class: 'meta' },
             el('span', { class: 'sender' }, m.sender),
-            current === null ? el('button', { class: 'topic-tag', type: 'button', onclick: () => go(m.topic) }, '#' + m.topic) : null,
+            current === null ? el('button', { class: 'topic-tag', type: 'button', onclick: () => go(m.topic) }, label(m.topic)) : null,
             el('span', { class: 'time', title: new Date(m.createdAt).toLocaleString() }, fmtTime(m.createdAt))),
           renderContent(m.content))));
       prev = m;
@@ -371,7 +388,10 @@
 
   const renderComposer = () => {
     $('topic-field-wrap').hidden = current !== null;
-    $('text').placeholder = current === null ? 'Message a topic…' : `Message every agent on #${current}…`;
+    $('targets').replaceChildren(...sessions.map(x => el('option', { value: '@' + x.name })),
+      ...topics.filter(t => !sessionOf(t.name)).map(t => el('option', { value: t.name })));
+    $('text').placeholder = current === null ? 'Message a topic…'
+      : sessionOf(current) ? `Message ${current.slice(1)} directly…` : `Message every agent on ${label(current)}…`;
   };
 
   const render = (stick) => { renderSidebar(); renderHead(); renderMessages(stick); renderComposer(); };
@@ -416,7 +436,7 @@
   });
 
   const deleteTopic = async (name) => {
-    if (!confirm(`Delete #${name} and all its messages? Subscribed agents lose it too.`)) return;
+    if (!confirm(`Delete ${label(name)} and all its messages? Subscribed agents lose it too.`)) return;
     await api('/api/topics/' + encodeURIComponent(name), { method: 'DELETE' });
     go(null);
   };

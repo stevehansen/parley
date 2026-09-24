@@ -26,6 +26,32 @@ public class CollabHubTests : IDisposable
     }
 
     [Fact]
+    public void DirectTopic_SubscribesTheNamedSession()
+    {
+        using var hub = new CollabHub();
+        hub.EnsureSession("HC");
+
+        var msg = hub.SendMessage("human", "@hc", "are you there?", subscribeSender: false);
+
+        var topic = hub.GetTopics().ShouldHaveSingleItem();
+        topic.Subscribers.ShouldBe(["HC"]); // spelled as the session is known, sender not added
+        hub.IsDeliverable("HC", msg).ShouldBeTrue();
+        hub.GetUnreadCounts("HC")["@hc"].ShouldBe(1);
+    }
+
+    [Fact]
+    public void DirectTopic_BetweenAgents_ReachesBothWays()
+    {
+        using var hub = new CollabHub();
+        var ask = hub.SendMessage("frontend", "@backend", "which port?");
+        hub.IsDeliverable("backend", ask).ShouldBeTrue();
+
+        var reply = hub.SendMessage("backend", "@backend", "5000");
+        hub.IsDeliverable("frontend", reply).ShouldBeTrue();
+        hub.GetTopics().ShouldHaveSingleItem().Subscribers.Count.ShouldBe(2);
+    }
+
+    [Fact]
     public async Task ReadMessages_ReturnsMessagesAfterSinceId()
     {
         using var hub = new CollabHub();

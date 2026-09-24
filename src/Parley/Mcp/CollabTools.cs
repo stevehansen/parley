@@ -40,7 +40,7 @@ internal static class CollabTools
         tools.Add(Tool("send_message",
             "Send a message to a topic. Auto-creates the topic and subscribes you if needed — just send. Every other subscriber receives it.",
             ["topic", "content"],
-            ("topic", "string", "Topic to send to (auto-created if needed)"),
+            ("topic", "string", "Topic to send to (auto-created if needed); '@<session>' messages one session directly"),
             ("content", "string", "Message content")));
         tools.Add(Tool("read_messages",
             "Read messages from a topic (auto-subscribes you). Returns messages after the given cursor. Use for history, or to wait for a reply when pushed messages aren't arriving.",

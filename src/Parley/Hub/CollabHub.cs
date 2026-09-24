@@ -221,6 +221,9 @@ public sealed class CollabHub : IDisposable
                 EnsureTopicAndSubscribe(session, topic);
             else if (!_topics.ContainsKey(topic))
                 _topics[topic] = new Topic { Name = topic, CreatedBy = session, HasHadSubscriber = true };
+            // "@name" is that session's direct line: whoever writes there, it is listening.
+            if (DirectRecipient(topic) is { } recipient && !recipient.Equals(session, StringComparison.OrdinalIgnoreCase))
+                EnsureTopicAndSubscribe(recipient, topic, $"Direct messages to {recipient}");
 
             msg = new Message { Id = ++_nextMessageId, Topic = topic, Sender = session, Content = content };
             _messages.Add(msg);
@@ -358,6 +361,14 @@ public sealed class CollabHub : IDisposable
         if (!_cursors.TryGetValue(session, out var cursors))
             _cursors[session] = cursors = new(StringComparer.OrdinalIgnoreCase);
         cursors.TryAdd(topic, 0);
+    }
+
+    /// <summary>The session a direct topic (<c>@name</c>) belongs to, spelled as the hub knows it.</summary>
+    private string? DirectRecipient(string topic)
+    {
+        if (topic.Length < 2 || topic[0] != '@') return null;
+        var name = topic[1..];
+        return _sessions.TryGetValue(name, out var s) ? s.Name : name;
     }
 
     private void RaiseChanged() => StateChanged?.Invoke();
