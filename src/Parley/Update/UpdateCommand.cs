@@ -126,7 +126,7 @@ internal static class UpdateCommand
             {
                 using var http = new HttpClient { Timeout = TimeSpan.FromSeconds(3) };
                 using var body = new StringContent("{}", System.Text.Encoding.UTF8, "application/json");
-                (await http.PostAsync($"{ParleyConfig.HubUrl}/api/shutdown", body)).Dispose();
+                (await http.PostAsync($"{ParleyConfig.LocalHubUrl}/api/shutdown", body)).Dispose();
                 using var hub = Process.GetProcessById(running);
                 hub.WaitForExit(5000);
             }
@@ -151,7 +151,7 @@ internal static class UpdateCommand
         try
         {
             using var http = new HttpClient { Timeout = TimeSpan.FromSeconds(3) };
-            using var health = JsonDocument.Parse(await http.GetStringAsync($"{ParleyConfig.HubUrl}/api/health"));
+            using var health = JsonDocument.Parse(await http.GetStringAsync($"{ParleyConfig.LocalHubUrl}/api/health"));
             return health.RootElement.TryGetProperty("pid", out var pid) ? pid.GetInt32() : null;
         }
         catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException or JsonException)

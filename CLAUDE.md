@@ -21,6 +21,7 @@ Parley: pub/sub topics for AI coding agents, with push delivery through Claude C
 - Never auto-apply updates: the user decides when the hub restarts on a new version.
 - `parley update` must not kill shims: running sessions keep their (old) shim, which reconnects to the new hub.
 - Web UI edits need a rebuild (the page is embedded).
+- Anything acting on the hub *process* (stop, kill by pid) uses `ParleyConfig.LocalHubUrl`, never `HubUrl`, which may point at another machine.
 
 ## Test / release
 

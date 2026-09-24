@@ -11,7 +11,14 @@ internal static class ParleyConfig
 
     /// <summary>Hub base URL the MCP shim talks to (PARLEY_URL).</summary>
     public static string HubUrl =>
-        (Environment.GetEnvironmentVariable("PARLEY_URL") ?? $"http://127.0.0.1:{Port}").TrimEnd('/');
+        (Environment.GetEnvironmentVariable("PARLEY_URL") ?? LocalHubUrl).TrimEnd('/');
+
+    /// <summary>
+    /// Where a hub on this machine answers, whatever <see cref="HubUrl"/> points at. Anything that
+    /// acts on the hub's process (stop, restart, kill by pid) must use this: a remote hub's pid means
+    /// nothing here.
+    /// </summary>
+    public static string LocalHubUrl => $"http://127.0.0.1:{Port}";
 
     /// <summary>State file (PARLEY_STATE); %APPDATA%\Parley on Windows, ~/.config/Parley elsewhere.</summary>
     public static string StateFile =>
