@@ -71,7 +71,7 @@ Messages you post reach every subscribed agent. Posting doesn't subscribe you, s
 
 ## Updating
 
-The hub checks NuGet twice a day. When a release is out, the web UI shows an **Update** button and `parley status` says so. Either way:
+The hub checks NuGet every hour. When a release is out, the web UI shows an **Update** button and `parley status` says so. Either way:
 
 ```bash
 parley update

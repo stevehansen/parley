@@ -51,7 +51,7 @@ internal static class UpdateCommand
     private static int UpdateInPlace(string version, bool restartService)
     {
         KillOtherParleyProcesses();
-        var psi = new ProcessStartInfo("dotnet", $"tool update -g {UpdateChecker.PackageId} --version {version} --ignore-failed-sources");
+        var psi = new ProcessStartInfo("dotnet", $"tool update -g {UpdateChecker.PackageId} --version {version} --ignore-failed-sources --no-http-cache");
         using var p = Process.Start(psi)!;
         p.WaitForExit();
 
@@ -91,7 +91,7 @@ internal static class UpdateCommand
             set /a ATTEMPT+=1
             REM AI clients respawn their parley shim right away, re-locking the tool: kill, then update at once.
             taskkill /f /im parley.exe >nul 2>&1
-            dotnet tool update -g {UpdateChecker.PackageId} --version {version} --ignore-failed-sources > "%TEMP%\parley-update-output.txt" 2>&1
+            dotnet tool update -g {UpdateChecker.PackageId} --version {version} --ignore-failed-sources --no-http-cache > "%TEMP%\parley-update-output.txt" 2>&1
             if not errorlevel 1 (
                 echo %date% %time% updated {current} to {version} >> "{log}"
                 goto RESTART

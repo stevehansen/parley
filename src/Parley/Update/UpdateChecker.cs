@@ -10,7 +10,7 @@ public sealed class UpdateChecker(Func<CancellationToken, Task<string?>>? fetchI
 {
     public const string PackageId = "HC.Parley";
     private const string IndexUrl = "https://api.nuget.org/v3-flatcontainer/hc.parley/index.json";
-    private static readonly TimeSpan Interval = TimeSpan.FromHours(12);
+    private static readonly TimeSpan Interval = TimeSpan.FromHours(1);
 
     private readonly Func<CancellationToken, Task<string?>> _fetchIndex = fetchIndex ?? FetchIndexAsync;
 
