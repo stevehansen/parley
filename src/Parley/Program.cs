@@ -64,6 +64,9 @@ switch (args.FirstOrDefault())
             if (OperatingSystem.IsWindows()) Native.FreeConsole();
         }
 
+        // Files an earlier update moved aside, now that their shims may have exited.
+        if (ServiceManager.ToolShimPath() is { } toolShim) ToolFiles.DeleteLeftovers(toolShim);
+
         var legacy = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "TerminalHost", "collab-state.json");
         var hub = new CollabHub(ParleyConfig.StateFile, legacy);
         var updates = new UpdateChecker();

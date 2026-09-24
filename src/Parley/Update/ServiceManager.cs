@@ -67,7 +67,13 @@ internal static class ServiceManager
         else Run("systemctl", "--user stop parley.service");
     }
 
-    /// <summary>Shell command that starts the service again; used by the update trampoline.</summary>
+    public static void Start()
+    {
+        var parts = StartCommand().Split(' ', 2);
+        Run(parts[0], parts[1]);
+    }
+
+    /// <summary>Shell command that starts the service again.</summary>
     public static string StartCommand() =>
         OperatingSystem.IsWindows() ? $"schtasks.exe /run /tn {TaskName}"
         : OperatingSystem.IsMacOS() ? $"launchctl start {LaunchdLabel}"

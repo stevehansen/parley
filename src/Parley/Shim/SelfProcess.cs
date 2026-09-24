@@ -8,6 +8,12 @@ internal static class SelfProcess
     public static void StartDetached(string arguments)
     {
         var (file, args) = SelfCommand(arguments);
+        StartDetached(file, args);
+    }
+
+    /// <summary>Starts <paramref name="file"/> (another parley, e.g. a freshly updated one) detached.</summary>
+    public static void StartDetached(string file, string args)
+    {
         var psi = new ProcessStartInfo(file, args);
         if (OperatingSystem.IsWindows())
         {

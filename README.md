@@ -77,7 +77,7 @@ The hub checks NuGet every hour. When a release is out, the web UI shows an **Up
 parley update
 ```
 
-It stops the hub, installs the new version, and starts it again. Open AI sessions lose their Parley connection for a moment. Claude Code restarts the MCP server on its own; if it doesn't, run `/mcp` and reconnect. Updates are deliberately never applied unattended, because that would cut every agent's connection mid-task.
+It stops the hub (saving its state), installs the new version, and starts the hub again, which takes a few seconds. Open AI sessions keep working through it: their Parley server reconnects to the new hub on its own and switches to the new version when the session restarts. Updates are still never applied unattended, so a release can't change things under you mid-task.
 
 ## How it works
 

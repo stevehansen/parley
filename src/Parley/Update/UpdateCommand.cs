@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Text.Json;
 using Parley.Shim;
 
 namespace Parley.Update;
@@ -6,12 +7,11 @@ namespace Parley.Update;
 /// <summary>
 /// <c>parley update</c>: installs the newest HC.Parley and brings the hub back on it.
 ///
-/// Every running parley process (the hub and each session's shim) holds the tool's files open,
-/// and on Windows that blocks <c>dotnet tool update</c>. So on Windows the update runs from a
-/// small script after this process exits: it kills parley processes and retries the update to
-/// out-race AI clients respawning their shim. Either way the service is started again afterwards,
-/// on the new version or — if the update failed — the old one. Open AI sessions reconnect on
-/// their own (Claude Code respawns stdio servers) or via /mcp.
+/// Only the hub is stopped. AI sessions keep their shims (the old version) running and switch
+/// when they next restart; on Windows the files those shims hold open are moved out of the
+/// update's way first (<see cref="ToolFiles"/>). The hub comes back afterwards — on the new
+/// version, or on the old one if the update failed. The outcome goes to update.log as well,
+/// since an update started from the web UI has no console.
 /// </summary>
 internal static class UpdateCommand
 {
@@ -33,105 +33,106 @@ internal static class UpdateCommand
         Console.WriteLine($"Update available: {current.ToString(3)} → {latest.ToString(3)}");
         if (checkOnly) return 0;
 
-        if (ServiceManager.ToolShimPath() == null)
+        var toolShim = ServiceManager.ToolShimPath();
+        if (toolShim == null)
         {
             Console.WriteLine($"Parley isn't installed as a global dotnet tool here. Update with:\n  dotnet tool update -g {UpdateChecker.PackageId}");
             return 1;
         }
 
-        var restartService = ServiceManager.IsInstalled();
-        if (restartService) ServiceManager.Stop();
-
         var version = latest.ToString(3);
-        return OperatingSystem.IsWindows()
-            ? StartWindowsTrampoline(current.ToString(3), version, restartService)
-            : UpdateInPlace(version, restartService);
+        var service = ServiceManager.IsInstalled();
+        await StopHubAsync(service);
+
+        ToolFiles.DeleteLeftovers(toolShim);
+        var moved = OperatingSystem.IsWindows() ? ToolFiles.MoveInUseAside(toolShim) : [];
+        var (code, output) = DotnetToolUpdate(version);
+        if (code != 0) ToolFiles.Restore(moved);
+
+        // A shim may have restarted a hub meanwhile (its reconnect loop does that): replace it too.
+        await StopHubAsync(service: false);
+        if (service) ServiceManager.Start();
+        else SelfProcess.StartDetached(toolShim, "serve --background");
+
+        AppendLog(code == 0
+            ? $"updated {current.ToString(3)} to {version}"
+            : $"update {current.ToString(3)} to {version} FAILED:\n{output.Trim()}");
+        Console.WriteLine(code == 0
+            ? $"Updated to {version}; the hub runs the new version. Open AI sessions switch when they restart."
+            : $"Update failed; still on {current.ToString(3)}.\n{output.Trim()}");
+        return code;
     }
 
-    private static int UpdateInPlace(string version, bool restartService)
+    /// <summary>
+    /// Stops the running hub — the service's, or one a shim started on demand — so the hub that
+    /// starts afterwards is the updated one. Asked to shut down first: killed outright, a hub
+    /// loses the subscriptions and read positions of its last few seconds.
+    /// </summary>
+    private static async Task StopHubAsync(bool service)
     {
-        KillOtherParleyProcesses();
-        var psi = new ProcessStartInfo("dotnet", $"tool update -g {UpdateChecker.PackageId} --version {version} --ignore-failed-sources --no-http-cache");
-        using var p = Process.Start(psi)!;
-        p.WaitForExit();
-
-        if (restartService)
+        var pid = await HubPidAsync();
+        if (pid is { } running && running != Environment.ProcessId)
         {
-            var parts = ServiceManager.StartCommand().Split(' ', 2);
-            using var start = Process.Start(parts[0], parts[1]);
-            start?.WaitForExit();
+            try
+            {
+                using var http = new HttpClient { Timeout = TimeSpan.FromSeconds(3) };
+                using var body = new StringContent("{}", System.Text.Encoding.UTF8, "application/json");
+                (await http.PostAsync($"{ParleyConfig.HubUrl}/api/shutdown", body)).Dispose();
+                using var hub = Process.GetProcessById(running);
+                hub.WaitForExit(5000);
+            }
+            catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException or ArgumentException) { }
         }
-
-        Console.WriteLine(p.ExitCode == 0
-            ? $"Updated to {version}. Restart AI sessions (or /mcp → reconnect) to load the new shim."
-            : "Update failed; still on the previous version.");
-        return p.ExitCode;
+        if (service) ServiceManager.Stop();
+        if (pid is not { } id || id == Environment.ProcessId) return;
+        try
+        {
+            using var hub = Process.GetProcessById(id);
+            if (!hub.HasExited) hub.Kill();
+            hub.WaitForExit(5000);
+        }
+        catch (Exception ex) when (ex is ArgumentException or InvalidOperationException or System.ComponentModel.Win32Exception)
+        {
+            // Already gone.
+        }
     }
 
-    private static int StartWindowsTrampoline(string current, string version, bool restartService)
+    private static async Task<int?> HubPidAsync()
+    {
+        try
+        {
+            using var http = new HttpClient { Timeout = TimeSpan.FromSeconds(3) };
+            using var health = JsonDocument.Parse(await http.GetStringAsync($"{ParleyConfig.HubUrl}/api/health"));
+            return health.RootElement.TryGetProperty("pid", out var pid) ? pid.GetInt32() : null;
+        }
+        catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException or JsonException)
+        {
+            return null;
+        }
+    }
+
+    private static (int code, string output) DotnetToolUpdate(string version)
+    {
+        // --no-http-cache: right after a release, dotnet's cached package index doesn't list it yet.
+        var psi = new ProcessStartInfo("dotnet",
+            $"tool update -g {UpdateChecker.PackageId} --version {version} --ignore-failed-sources --no-http-cache")
+        {
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            UseShellExecute = false,
+        };
+        using var p = Process.Start(psi)!;
+        var stderr = p.StandardError.ReadToEndAsync();
+        var stdout = p.StandardOutput.ReadToEnd();
+        p.WaitForExit();
+        return (p.ExitCode, stdout + stderr.Result);
+    }
+
+    private static void AppendLog(string line)
     {
         var log = Path.Combine(Path.GetDirectoryName(ParleyConfig.StateFile)!, "update.log");
-        var script = Path.Combine(Path.GetTempPath(), $"parley-update-{Guid.NewGuid():N}.cmd");
-        var pid = Environment.ProcessId;
-        File.WriteAllText(script, $"""
-            @echo off
-            setlocal
-            set /a TRIES=0
-            :WAIT
-            tasklist /fi "PID eq {pid}" 2>nul | find "{pid}" >nul
-            if errorlevel 1 goto UPDATE
-            set /a TRIES+=1
-            if %TRIES% geq 30 goto UPDATE
-            timeout /t 1 /nobreak >nul
-            goto WAIT
-
-            :UPDATE
-            set /a ATTEMPT=0
-            :RETRY
-            set /a ATTEMPT+=1
-            REM AI clients respawn their parley shim right away, re-locking the tool: kill, then update at once.
-            taskkill /f /im parley.exe >nul 2>&1
-            dotnet tool update -g {UpdateChecker.PackageId} --version {version} --ignore-failed-sources --no-http-cache > "%TEMP%\parley-update-output.txt" 2>&1
-            if not errorlevel 1 (
-                echo %date% %time% updated {current} to {version} >> "{log}"
-                goto RESTART
-            )
-            if %ATTEMPT% lss 5 (
-                timeout /t 2 /nobreak >nul
-                goto RETRY
-            )
-            echo %date% %time% update {current} to {version} FAILED: >> "{log}"
-            type "%TEMP%\parley-update-output.txt" >> "{log}"
-
-            :RESTART
-            {(restartService ? ServiceManager.StartCommand() + " >nul 2>&1" : "REM hub starts with the next AI session")}
-            del "%~f0"
-            """);
-
-        Process.Start(new ProcessStartInfo("cmd.exe", $"/d /c \"{script}\"")
-        {
-            UseShellExecute = true,
-            WindowStyle = ProcessWindowStyle.Hidden,
-        })?.Dispose();
-
-        Console.WriteLine($"""
-            Updating to {version} in the background (log: {log}).
-            The hub restarts in a few seconds; AI sessions reconnect on their own, or via /mcp → reconnect.
-            """);
-        return 0;
-    }
-
-    private static void KillOtherParleyProcesses()
-    {
-        foreach (var p in Process.GetProcessesByName("parley"))
-        {
-            using (p)
-            {
-                if (p.Id == Environment.ProcessId) continue;
-                try { p.Kill(entireProcessTree: true); }
-                catch (Exception ex) when (ex is InvalidOperationException or System.ComponentModel.Win32Exception) { }
-            }
-        }
+        Directory.CreateDirectory(Path.GetDirectoryName(log)!);
+        File.AppendAllText(log, $"{DateTime.Now:yyyy-MM-dd HH:mm:ss} {line}{Environment.NewLine}");
     }
 
     /// <summary>Starts <c>parley update</c> detached — how the hub's web UI triggers an update.</summary>

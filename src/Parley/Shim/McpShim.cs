@@ -240,8 +240,17 @@ public sealed class McpShim
             {
                 if (!IsLocal(_hubUrl)) return; // a remote hub is not ours to start
                 Log.Info("no hub running; starting one");
-                SelfProcess.StartDetached("serve --background");
                 _hubStartedAt = DateTime.UtcNow;
+                try
+                {
+                    SelfProcess.StartDetached("serve --background");
+                }
+                catch (System.ComponentModel.Win32Exception ex)
+                {
+                    // Mid-update the tool's files can be briefly missing; the updater starts the hub.
+                    Log.Error("could not start a hub", ex);
+                    return;
+                }
             }
             for (var i = 0; i < 50 && !await IsHubUpAsync(ct); i++)
                 await Task.Delay(100, ct);

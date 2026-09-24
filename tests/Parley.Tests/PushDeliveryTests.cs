@@ -134,6 +134,19 @@ public class PushDeliveryTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task Shutdown_StopsTheHub_OnlyForJsonPosts()
+    {
+        var formPost = await _http.PostAsync(_url + "/api/shutdown", new StringContent("", System.Text.Encoding.UTF8, "text/plain"));
+        formPost.IsSuccessStatusCode.ShouldBeFalse();
+        _app.Lifetime.ApplicationStopping.IsCancellationRequested.ShouldBeFalse();
+
+        var ok = await _http.PostAsync(_url + "/api/shutdown", new StringContent("{}", System.Text.Encoding.UTF8, "application/json"));
+        ok.StatusCode.ShouldBe(HttpStatusCode.Accepted);
+        await Task.Delay(200);
+        _app.Lifetime.ApplicationStopping.IsCancellationRequested.ShouldBeTrue();
+    }
+
+    [Fact]
     public async Task DeleteTopic_Endpoint()
     {
         _hub.SendMessage("a", "gone", "x");

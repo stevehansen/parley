@@ -20,6 +20,7 @@ namespace Parley.Hub;
 ///   POST /api/messages             {session, topic, content} — send without MCP (UIs, scripts)
 ///   DELETE /api/topics/{name}      delete a topic and its messages
 ///   POST /api/update               install the newest release (restarts the hub)
+///   POST /api/shutdown             stop, saving state first (how `parley update` stops the hub)
 ///   GET  /                         the web UI
 ///   GET  /api/events               SSE. With ?session=X: the messages X should receive (its topics,
 ///                                  not its own), optionally replaying ids after ?since=N; the
@@ -67,6 +68,7 @@ public static class HubServer
             version = Protocol.Version,
             latest = updates?.Latest?.ToString(3),
             updateAvailable = updates?.UpdateAvailable ?? false,
+            pid = Environment.ProcessId, // lets `parley update` stop a hub the service doesn't own
         }));
         app.MapGet("/api/topics", () => Results.Ok(hub.GetTopics()));
         app.MapGet("/api/sessions", () => Results.Ok(hub.GetSessions()));
@@ -80,6 +82,11 @@ public static class HubServer
         });
         app.MapDelete("/api/topics/{name}", (string name) =>
             hub.DeleteTopic(name) ? Results.NoContent() : Results.NotFound());
+        app.MapPost("/api/shutdown", (ShutdownRequest _) =>
+        {
+            app.Lifetime.StopApplication();
+            return Results.Accepted();
+        });
         app.MapPost("/api/update", (UpdateRequest _) =>
         {
             if (updates is not { UpdateAvailable: true })
@@ -125,6 +132,8 @@ public static class HubServer
     public sealed record SendRequest(string? Session, string? Topic, string? Content);
 
     public sealed record UpdateRequest;
+
+    public sealed record ShutdownRequest;
 
     private static bool IsLoopbackHost(string host) =>
         host is "localhost" or "127.0.0.1" or "[::1]" or "::1";
