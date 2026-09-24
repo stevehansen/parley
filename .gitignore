@@ -1,0 +1,38 @@
+## .NET
+bin/
+obj/
+*.user
+*.suo
+*.sln.docstates
+.vs/
+
+## NuGet
+*.nupkg
+**/packages/
+project.lock.json
+
+## Build
+[Dd]ebug/
+[Rr]elease/
+x64/
+x86/
+build/
+bld/
+
+## IDE
+.idea/
+*.swp
+*~
+.vscode/
+
+## Node (SDK + docs tooling)
+node_modules/
+sdk/typescript/dist/
+
+## Generated files
+*.pptx
+
+## OS
+Thumbs.db
+.DS_Store
+/.claude/scheduled_tasks.lock

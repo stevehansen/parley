@@ -1,0 +1,33 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+
+    <!-- dotnet tool packaging -->
+    <PackAsTool>true</PackAsTool>
+    <ToolCommandName>parley</ToolCommandName>
+    <PackageId>parley-mcp</PackageId>
+    <Version>0.1.0</Version>
+
+    <Authors>Steve Hansen</Authors>
+    <Description>Pub/sub topics for AI coding agents — lets Claude Code sessions message each other, with push delivery via Claude Code channels.</Description>
+    <PackageLicenseExpression>MIT</PackageLicenseExpression>
+    <PackageProjectUrl>https://github.com/stevehansen/parley</PackageProjectUrl>
+    <RepositoryUrl>https://github.com/stevehansen/parley</RepositoryUrl>
+    <RepositoryType>git</RepositoryType>
+    <PackageTags>ai;mcp;claude-code;agents;collaboration;pubsub</PackageTags>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="Parley.Tests" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <None Include="..\..\README.md" Pack="true" PackagePath="\" />
+  </ItemGroup>
+
+</Project>
